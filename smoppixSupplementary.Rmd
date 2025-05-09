@@ -1,0 +1,2299 @@
+---
+title: "Supplementary material for 'Unified nonparametric analysis of single-molecule spatial omics data using probabilistic indices'"
+author: "Stijn Hawinkel, Xilan Yang, Ward Poelmans, Hans Motte, Tom Beeckman and Steven Maere"
+output: 
+  pdf_document:
+    number_sections: true
+    keep_tex: yes
+    includes:
+            in_header: stx.sty
+---
+
+\beginsupplement{0}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE, 
+                      cache.lazy = FALSE, message = FALSE, echo = FALSE, 
+                      eval = TRUE, tidy = TRUE, fig.width = 9, fig.height = 7, 
+                      purl = TRUE, fig.show = "hold", fig.pos = "p")
+libs = c("ggplot2", "BiocParallel", "reshape2", "grid", "psych", "spatstat", "xtable",
+         "gplots", "openxlsx", "SpatialExperiment", "glmnet", "SPIAT", "png", "tiff",
+         "lmerTest", "spicyR", "smoppix", "parallel", "peakRAM", "extraDistr")
+for (i in libs){
+  library(i, character.only = TRUE, quietly = TRUE)
+};rm(i, libs)
+for(i in list.files("R")){source(file.path("R", i))};rm(i)
+theme_set(theme_bw())
+sigLevel = 0.05 
+nCores = 4 
+```
+
+```{r createFolders, eval = FALSE}
+foo = lapply(c("GraphsPaper", "Results", "Data", "Data/Eng2019", "Data/Dar2021", "Data/Yang2023", "Data/Eng2019/NIH3T3/"), dir.create)
+```
+
+\tableofcontents
+
+# Real data analysis
+
+## Discoveries on \emph{S. moellendorfii} roots are confirmed by HCR RNA-FISH 
+
+In the initial \emph{S. moellendorfii} root study by \textcite{Yang2023}, all transcripts measured are localized towards the center of the roots (see \fref{fig:plotTiffYang}), since the genes analyzed are primarily active in the vasculature. Hence we use the background of all other transcripts as baseline to call co- or antilocalization using \smop. The sections were taken at different planes of the root, but are considered here as repeated measures. All images can be found at \url{https://bioinformatics.psb.ugent.be/webtools/spatial-transcriptomics/selaginella/}
+
+```{r readInYang}
+if(!file.exists(yangFile <- "Data/Yang2023.RData")){
+    # download.file(url = "www.cell.com/cms/10.1016/j.cub.2023.08.030/attachment/35fec8f6-bbbe-4629-92e3-4397b3ab9582/mmc2.xlsx", destfile = "Data/Yang2023/SupplementTables.xlsx") #Refused by Cell
+    geneCodesToNames = read.xlsx("Data/Yang2023/SupplementTables.xlsx", sheet = 1, startRow = 2, cols = 1:7)
+    # 3 genes are not in this table: LOC9650718, LOC112344873 and LOC9652292. Xilan Yang deleted them as they are similar to other genes present
+    coordFiles = list.files("Data/Yang2023/coordinates", full.names = TRUE)
+    expNames = sapply(coordFiles, substr, 40, 43)
+    coordList = lapply(seq_along(coordFiles), function(i){
+        tmp = read.table(coordFiles[i], col.names = c("x", "y", "z", "geneId"))
+        tmp$gene = geneCodesToNames$Name.in.publication[match(gsub( "GeneID_", "LOC", tmp$geneId), geneCodesToNames$NCBI.ID)]
+        #Drops genes not in table
+        tmp = tmp[!is.na(tmp$gene), ]
+        tmp$geneId = NULL
+        experiment = expNames[i]
+        tmp$day = ifelse(grepl(experiment, pattern = "1-"), "day0", "day3")
+        tmp$well = sapply(experiment, substr, 4, 4)
+        #Manually cut up in sections
+        tmp$section = switch(experiment, 
+                              "A1-1" = {
+                                 sec = rep("section3", nrow(tmp))
+                                 sec[tmp$x > 5e3 & tmp$x < 15e3] = "section4"
+                                 sec[tmp$x > 15e3 & tmp$x < 25e3] = "section5"
+                                 sec[tmp$x > 25e3] = "section6"
+                                 paste0(sec, "_Root2")
+                             }, 
+                             "A1-2" = {
+                                 sec = rep("section8_Root3", nrow(tmp))
+                                 sec[tmp$x < 1e4 & tmp$y > 8500] = "section7_Root3"
+                                 sec[tmp$x < 1e4 & tmp$y < 8500] = "section10_Root2"
+                                 sec[tmp$x > 1e4 & tmp$x < 15e4 & tmp$y < 8500] = "section9_Root2"
+                                 sec[tmp$x > 17e3 & tmp$x < 25e3] = "section8_Root2"
+                                 sec[tmp$x > 25e3] = "section7_Root2"
+                                 sec
+                             }, 
+                             "A1-3" = {
+                                 sec = rep("section1", nrow(tmp))
+                                 sec[tmp$x > 5e3 & tmp$x < 15e3 & tmp$y < 6e3] = "section4"
+                                 sec[tmp$x > 15e3 & tmp$x < 25e3 & tmp$y < 6e3] = "section5"
+                                 sec[tmp$x > 25e3 & tmp$y < 6e3] = "section6"
+                                 sec[tmp$x > 15e3 & tmp$x < 25e3 & tmp$y > 6e3] = "section2"
+                                 sec[tmp$x > 25e3 & tmp$y > 6e3] = "section3"
+                                 sec = paste0(sec, "_Root3")
+                                 sec[tmp$x < 5e3 ] = NA
+                                 sec
+                             },
+                             "A1-4" = { #Not in root cap
+                                 sec = rep("section1_Root2", nrow(tmp))
+                                 sec[tmp$y > 1e4] = "section2_Root2"
+                                 sec
+                             }, 
+                            "A2-1" = {
+                                 sec = rep("section3", nrow(tmp))
+                                 sec[tmp$x > 7e3] = "section1"
+                                 sec[tmp$x < 1e4 & tmp$y > 2e4] = "section2"
+                                 sec[tmp$x < 1e4 & tmp$y < 6e3] = "section4"
+                                 sec = paste0(sec, "_Root5")
+                                 sec[tmp$x > 2e4 ] = NA
+                                 sec
+                             },
+                             "A2-2" = {
+                                 sec = rep("section1", nrow(tmp))
+                                 sec[tmp$x > 15e3] = "section2"
+                                 sec = paste0(sec, "_Root6")
+                                 sec[tmp$y > 12e3] = NA
+                                 sec
+                             },
+                            "A2-3" = {
+                                 sec = rep("section4", nrow(tmp))
+                                 sec[tmp$y > 2e4] = "section5"
+                                 sec[tmp$y < 5e3] = "section3"
+                                 paste0(sec, "_Root6")
+                             }, "B1-1" = {
+                                 sec = rep("section4", nrow(tmp))
+                                 sec[tmp$x > 2e4 & tmp$y < 8500] = "section6"
+                                 sec[tmp$x > 7500 & tmp$x < 18e3 & tmp$y < 8500] = "section7"
+                                 sec[tmp$x > 7500 & tmp$x < 18e3 & tmp$y > 8500] = "section5"
+                                 sec[tmp$x < 7500 & tmp$y < 8500] = "section8"
+                                 paste0(sec, "_Root1")
+                             }, "B1-2" = {
+                                 sec = rep("section1_Root1", nrow(tmp))
+                                 sec[tmp$y > 5e3 | tmp$x > 1e4] = NA
+                                 sec
+                             }, "B1-3" = {
+                                 sec = rep("section2", nrow(tmp))
+                                 sec[tmp$y < 6e3] = "section3"
+                                 paste0(sec, "_Root1")
+                             }, "B2-1" = {
+                                 sec = rep("section9", nrow(tmp))
+                                 sec[tmp$x < 7e3 & tmp$y < 3e4] = "section10"
+                                 sec[tmp$x > 7e3 & tmp$y > 4e4] = "section8"
+                                 sec[tmp$x > 7e3 & tmp$y < 4e4 & tmp$y > 3e4] = "section7"
+                                 sec[tmp$x > 7e3 & tmp$y < 3e4 & tmp$y > 2e4] = "section6"
+                                 sec[tmp$x > 7e3 & tmp$y < 2e4 & tmp$y > 1e4] = "section5"
+                                 sec[tmp$x > 7e3 & tmp$y < 1e4] = "section4"
+                                 paste0(sec, "_Root1")
+                             }, "B2-2" = {
+                                 sec = rep("section2", nrow(tmp))
+                                 sec[tmp$y < 1e4] = "section3"
+                                 sec[tmp$y > 2e4] = "section1"
+                                 paste0(sec, "_Root1")
+                             }, "C1-1" = {
+                                 sec = rep("section7", nrow(tmp))
+                                 sec[tmp$x > 1e4 & tmp$x < 2e4 & tmp$y < 7e3] = "section8"
+                                 sec[tmp$x > 2e4 & tmp$y < 7e3] = "section9"
+                                 sec[tmp$x < 5e3] = "section3"
+                                 sec[tmp$x > 5e3 & tmp$x < 15e3 & tmp$y > 7e3] = "section4"
+                                 sec[tmp$x > 15e3 & tmp$x < 25e3 & tmp$y > 7e3] = "section5"
+                                 sec[tmp$x > 25e3 & tmp$y > 7e3] = "section6"
+                                 paste0(sec, "_Root5")
+                             }, "C1-2" = {
+                                 sec = rep("section4", nrow(tmp))
+                                 sec[tmp$x < 5e3 & tmp$y < 19e3] = "section1"
+                                 sec[tmp$x > 5e3 & tmp$x < 15e3 & tmp$y < 19e3] = "section2"
+                                 sec[tmp$x > 15e3 & tmp$y < 19e3] = "section3"
+                                 sec[tmp$x > 10e3 & tmp$y > 19e3] = "section5"
+                                 sec = paste0(sec, "_Root4")
+                                 sec[tmp$y < 7e3] = NA
+                                 sec
+                             }, "C1-3" = {
+                                 sec = rep("section1_Root5", nrow(tmp))
+                                 sec[tmp$y < 7e3 | tmp$y > 15e3] = NA
+                                 sec
+                             }, "C2-1" = {
+                                 sec = rep("section1", nrow(tmp))
+                                 sec[tmp$x > 5e3 & tmp$x < 15e3] = "section2"
+                                 sec[tmp$x > 15e3] = "section3"
+                                 paste0(sec, "_Root2")
+                             }, "C2-2" = {
+                                 sec = rep("section4", nrow(tmp))
+                                 sec[tmp$x > 7e3 & tmp$y < 1e4] = "section5"
+                                 sec[tmp$x < 7e3 & tmp$y > 1e4] = "section9"
+                                 sec[tmp$x > 7e3 & tmp$y > 1e4] = "section10"
+                                 paste0(sec, "_Root2")
+                             }, "C2-3" = {
+                                 sec = rep("section8", nrow(tmp))
+                                 sec[tmp$y > 12e3] = "section11"
+                                 sec[tmp$x < 6e3 & tmp$y < 1e4] = "section6"
+                                 sec[tmp$x > 6e3 & tmp$x < 13e3 & tmp$y < 1e4] = "section7"
+                                 paste0(sec, "_Root2")
+                             }, "D1-1" = {
+                                 sec = rep("section1", nrow(tmp))
+                                 sec[tmp$x > 8e3] = "section2"
+                                 sec = paste0(sec, "_Root6")
+                                 sec[tmp$y < 6e3] = NA
+                                 sec
+                             }, "D1-2" = {
+                                 sec = rep("section3", nrow(tmp))
+                                 sec[tmp$x < 8e3 & tmp$y < 9e3] = "section4"
+                                 sec[tmp$x < 8e3 & tmp$y > 9e3 & tmp$y < 19e3] = "section7"
+                                 sec[tmp$x > 8e3 & tmp$y > 9e3 & tmp$y < 19e3] = "section6"
+                                 sec[tmp$y > 2e4] = "section10"
+                                 paste0(sec, "_Root6")
+                             }, "D1-3" = {
+                                 sec = rep("section9", nrow(tmp))
+                                 sec[tmp$x > 8e3] = "section8"
+                                 sec[tmp$y < 6e3] = "section5"
+                                 paste0(sec, "_Root6")
+                             }, "D2-1" = {
+                                 sec = rep("section1", nrow(tmp))
+                                 sec[tmp$x > 8e3 & tmp$x < 17e3] = "section2"
+                                 sec[tmp$x > 17e3 & tmp$x < 25e3] = "section3"
+                                 sec[tmp$x > 3e4] = "section4"
+                                 paste0(sec, "_Root3")
+                             }, "D2-2" = {
+                                 sec = rep("section1", nrow(tmp))
+                                 sec[tmp$x > 8e3] = "section2"
+                                 sec[tmp$y > 17e3] = "section7"
+                                 sec = paste0(sec, "_Root4")
+                                 sec[tmp$y < 5e3] = NA
+                                 sec
+                             }, "D2-3" = {
+                                 sec = rep("section5", nrow(tmp))
+                                 sec[tmp$x > 1e4 & tmp$y < 15e3] = "section4"
+                                 sec[tmp$x < 1e4 & tmp$y < 15e3] = "section3"
+                                 sec[tmp$x < 5e3 & tmp$y > 15e3] = "section6"
+                                 sec = paste0(sec, "_Root4")
+                                 sec[tmp$y < 5e3] = NA
+                                 sec
+                             }    
+        )
+        tmp = tmp[!is.na(tmp$section),]
+        tmpSplit = sapply(tmp$section, function(tt) strsplit(tt, "_")[[1]])
+        tmp$section = tmpSplit[1,];tmp$root = tmpSplit[2,]
+        tmp$experiment = experiment
+        tmp
+        })
+    coordMat = Reduce(f = rbind, coordList)
+    hypYang = buildHyperFrame(coordMat, imageVars = c("root", "section", "day"), coordVars = c("x", "y"))
+    #A combination of day, root and section
+    hypYang[, "drs"] = paste(sep = "_", hypYang$day, hypYang$root, hypYang$section)
+    #For smoppix package
+    # Yang = coordMat[, c("x", "y", "gene", "day", "root", "section")]
+    # Yang = Yang[Yang$root %in% paste0("Root", 1:3) & Yang$section %in% paste0("section", 1:5), ]#Subset data
+    # Yang = Yang[!duplicated(apply(Yang, 1, paste, collapse = "_")),]#Avoid duplicates
+    # save(Yang, file = "smoppix/data/Yang.RData")
+    save(hypYang, file = yangFile)
+} else load(yangFile)
+unDrs = unique(hypYang$drs)
+```
+
+\begin{figure}
+\includegraphics[width = 0.3\linewidth, angle =90]{Graphs/Calcofluor.png}
+\caption{Calcofluor white staining of root 2, section 2 at day 0 of the \textit{smFISH} experiment by \textcite{Yang2023} with molecules of two example transcripts shown as dots. The cell walls are visible in light grey. More images can be found at \url{https://bioinformatics.psb.ugent.be/webtools/spatial-transcriptomics/selaginella/}.\label{fig:plotTiffYang}}
+\end{figure}
+
+```{r geneCombs}
+unGenesYang = getFeatures(hypYang); names(unGenesYang) = unGenesYang
+genePairsYang = makePairs(unGenesYang)
+names(genePairsYang) = genePairsYang
+```
+
+```{r permTest}
+if(!file.exists(distYangFile <- "Results/distResYang.RData")){
+    distResYang = estPis(hypYang, pis = c("nn", "nnPair"))
+    distResYang = addWeightFunction(distResYang, designVars = c("root", "day"))
+    lmmsYang = fitLMMs(distResYang, randomVars = "root", fixedVars = "day")
+    save(distResYang, lmmsYang, file = distYangFile)
+} else load(distYangFile)
+```
+
+```{r PIdist, fig.cap = "Histograms of estimated univariate (left) and bivariate (right) nearest-neighbour PIs for the Yang2023 \\textit{S. moellendorfii} root dataset.\\label{fig:histPIs}", fig.height = 5}
+piDfNN = sapply(distResYang$hypFrame$pimRes, function(x){
+        x$pointDists$nn
+    })
+piDfNNpair =  sapply(distResYang$hypFrame$pimRes, function(x){
+        x$pointDists$nnPair
+    })
+par(mfrow = c(1,2))
+hist(unlist(piDfNN), main = "Univariate nearest-neighbour PI", xlab = "PI estimate")
+hist(unlist(piDfNNpair), main = "Bivariate nearest-neighbour PI", xlab = "PI estimate")
+par(mfrow = c(1,1))
+```
+
+```{r wfnn, fig.cap = "Illustration of the weighting function for univariate nearest-neighbour distances on the Yang2023 \\textit{S. moellendorfii} root dataset.\\label{fig:nnwf}", fig.height = 3.8, fig.width = 5.5}
+plotWf(distResYang, "nn")
+```
+
+```{r wfnnPair, dpi = 30, fig.cap = "\\label{fig:nnwfPair}Illustration of the weighting function for the bivariate nearest-neighbour distance PI of the spatial transcriptomics dataset on \\emph{S. moellendorfii} roots. The modelled weight is shown in colour as a function of number of molecules in the least expressed (x-axis) and most expressed gene of the pair (y-axis).", fig.height = 4.5, fig.width = 6}
+plotWf(distResYang, "nnPair")
+```
+
+```{r distResPvalHist, include = FALSE, fig.height = 7.5, fig.width = 7, fig.cap = "P-value histograms (top) and corresponding (difference in) probabilistic index (bottom).\\label{fig:pValHistPerm}"}
+VarsYang = c("Intercept", "day");names(VarsYang) = VarsYang
+resYang = resYang2 = unlist(recursive = FALSE, lapply(VarsYang, function(v) lapply(c("nn" = "nn", "nnPair" = "nnPair"), function(x) getResults(lmmsYang, x, v))))
+names(resYang2) =  c("Univariate nearest-neighbours: Intercept", "Bivariate nearest-neighbours: Intercept", 
+                    "Univariate nearest-neighbours: day", "Bivariate nearest-neighbours: day")
+par(mfrow = c(4,2), mar = rep(3, 4))
+baaHist = lapply(names(resYang2), function(y){
+      hist(resYang2[[y]][, "pVal"], main = y, xlab = "P-value")  
+})
+baaHist = lapply(names(resYang2), function(y){
+      hist(resYang2[[y]][, 1], main = y, xlab = "Estimate")  
+})
+par(mfrow = c(1,1))
+colocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] < 0.5 & resYang$Intercept.nnPair[, "pAdj"] < sigLevel,])[1]
+colocFeatEffect = resYang2$`Bivariate nearest-neighbours: Intercept`[colocFeat, "Estimate"]
+```
+
+The distributions of the estimated PIs per point pattern over all features are shown in \fref{fig:histPIs}. The weighting functions for univariate and bivariate nearest-neighbour distance PIs are shown in Figures \ref{fig:nnwf}-\ref{fig:nnwfPair}. We find `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] < 0.5, na.rm = TRUE)` transcript pairs with significant colocalization and `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] > 0.5, na.rm = TRUE)` with antilocalization. The transcript pairs with the most significant colocalization and antilocalization are shown in Figures \ref{fig:colocYang}-\ref{fig:antilocYang}. 
+
+```{r plotPairsColoc, fig.height = 9, fig.cap = paste0("Most significantly colocalized gene pair in the \\textit{S. moellendoriff} root dataset according to \\smop. Despite its modest effect size (PI = ",  round(colocFeatEffect, 2), "), it owes its high significance to its consistency across replicates.\\label{fig:colocYang}")}
+numPps = 35
+plotTopResults(hypFrame = hypYang, results = lmmsYang, pi = "nnPair", Cex = 2, Cex.main = 0.7, CexLegend = 0.9, numFeats = 1, numPps = numPps)
+```
+
+```{r pairsLocPdf, include = FALSE}
+pdf("Graphs/colocYang.pdf", width = 8, height = 5)
+colocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] < 0.5 & resYang$Intercept.nnPair[, "pAdj"] < sigLevel,])[1]
+Pps = order(decreasing = TRUE, sapply(hypYang$tabObs, function(x) {sum(sapply(sund(colocFeat), function(y) {tmp = getGp(x, y); if(is.null(tmp)) NA else tmp}))}))
+plotExplore(hypYang, features = colocFeat, Cex = 2, ppps = Pps[seq_len(15)])
+dev.off()
+```
+
+```{r plotPairsantioc, fig.height = 9, fig.cap = "Gene pair with most significant antilocalization in the \\textit{S. moellendoriff} root dataset according to \\smop.\\label{fig:antilocYang}"}
+plotExplore(hypYang, features = antiLocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] > 0.5,])[1], Cex.main = 0.7, CexLegend = 0.9, numPps = numPps)
+```
+
+\clearpage
+ 
+### Authors' findings
+
+The authors of the original study came to the following conclusions based on pseudo-segmentation, calculation of Pearson correlation and hierarchical clustering \parencite{Yang2023}:
+
+ - SmTMO5b and SmVND1 are coexpressed
+ - SmWOX13a and SmCYCD3;3b are coexpressed (in day 3 root 1 sample)
+ - SmWOX13a and SmBRN are coexpressed
+ - SmSHRa, SmSCRa, SmSCRb, SmRBRa, SmBIRDa, and SmCYCD3;3a genes are coexpressed
+ 
+We can confirm some these colocalizations using \smop at a nominal FDR of `r sigLevel`, but not the pairs shown in Table \ref{tab:nonSignifPairs}. Plots for some of these pairs are shown in \fref{fig:Yang} in the main text and Figure \ref{fig:authors1} here. SmBIRDa is often found in two strips at the outer edges of the point cloud, whereas SmCYCD3;3a is more localized towards the center, contradicting colocalization. Similarly, SmSHRa often lies closer to the root tip than SmSCRa. The original analysis based on pseudosegmentation disregards distances between pseudosegments, and is thus indifferent to whether molecules are in adjacent pseudosegments or on the other side of the root. In addition, part of the finer spatial patterns are lost by binning.
+ 
+```{r findQvals, include = FALSE}
+genesExpand = c("SmSHRa", "SmSCRa", "SmSCRb", "SmRBRa", "SmBIRDa", "SmCYCD3;3a")
+combId = combn(length(genesExpand), 2)
+geneExpandPairs = apply(combId, 2, function(i) paste(genesExpand[i], collapse = "--"))
+pairsPrint = c("SmTMO5b--SmVND1", "SmWOX13a--SmCYCD3;3b", "SmWOX13a--SmBRN", geneExpandPairs)
+pValsPrint = t(sapply(pairsPrint, function(gp){
+    getGp(resYang$Intercept.nnPair, gp)
+}))
+pairDoubts = rownames(pValsPrint)[pValsPrint[, "pVal"] > sigLevel | pValsPrint[, "Estimate"] > 0.5]
+names(pairDoubts) = pairDoubts
+```
+
+```{r tabSignif, results = "asis"}
+colnames(pValsPrint)[c(1, 3, 4)] = c("PI estimate", "p-value", "Adjusted p-value")
+print.xtable(xtable(round(pValsPrint[pairDoubts, ][order(pValsPrint[pairDoubts, "PI estimate"]),], 3), display = c("s", "f", "f", "e", "e"),
+       caption = "P-values of nonsignificant (adjusted p-value > 0.05) or antilocalized (PI > 0.5) features according to \\smop, found colocalized by the authors. The table was sorted by PI estimate.\\label{tab:nonSignifPairs}"), comment = FALSE)
+```
+
+```{r plotAuthors1, fig.height = 9, fig.cap = "Transcript pair SmSCRa--SmSCRb which was found to be coexpressed by the authors but antilocalized in the \\smop analysis.\\label{fig:authors1}"}
+plotExplore(hypYang, features = "SmSCRa--SmSCRb", Cex = 2, Cex.main = 0.7, numPps = numPps)
+```
+
+```{r plotPres, include = FALSE}
+CexPlot = 2;psz = 3;Height = 5.6;
+PpsAL = order(decreasing = TRUE, sapply(hypYang$tabObs, function(x) {sum(sapply(sund(antiLocFeat), function(y) {tmp = getGp(x, y); if(is.null(tmp)) NA else tmp}))}))
+pdf("Graphs/Antiloc.pdf", pointsize = psz, height = Height)
+plotExplore(hypYang, features = antiLocFeat, Cex = CexPlot, ppps = PpsAL[seq_len(15)], Cex.main = 1.2, CexLegend = 1.4, CexLegendMain = 1.5)
+dev.off()
+pdf("Graphs/Coloc.pdf", pointsize = psz, height = Height)
+plotExplore(hypYang, features = colocFeat, Cex = CexPlot)
+dev.off()
+pdf("Graphs/Diff1.pdf", pointsize = psz, height = Height)
+plotExplore(hypYang, features = "SmBIRDa--SmCYCD3;3a", Cex = CexPlot)
+dev.off()
+pdf("Graphs/Diff2.pdf", pointsize = psz, height = Height)
+plotExplore(hypYang, features = "SmSHRa--SmSCRa", Cex = CexPlot)
+dev.off()
+```
+
+```{r plotPaper, include = FALSE}
+CexMain = 1.9;CexLegendYang = 2.3;CexLegendMainYang = 3
+MarYang <- c(1, 0.2, 1.5, 0.25);numPPsYang = 15
+colocFeatPaper = "SmPINR--SmSGNa"
+antiLocFeatPaper = "SmCYCD3;3a--SmBIRDa"
+PpsAL = order(decreasing = TRUE, sapply(hypYang$tabObs, function(x) {sum(sapply(sund(antiLocFeatPaper), function(y) {tmp = getGp(x, y); if(is.null(tmp)) NA else tmp}))}))
+Height = 4.9;Width = 7
+pdf("GraphsPaper/antilocYangValid.pdf", pointsize = psz, height = Height, width = Width)
+plotExplore(hypYang, features = antiLocFeatPaper, Cex = CexPlot, ppps = PpsAL[seq_len(numPPsYang)], Cex.main = CexMain, Mar = MarYang, CexLegend = CexLegendYang, CexLegendMain = CexLegendMainYang)
+dev.off()
+pdf("GraphsPaper/colocYangValid.pdf", pointsize = psz, height = Height, width = Width)
+PpsALcol = order(decreasing = TRUE, sapply(hypYang$tabObs, function(x) {sum(sapply(sund(colocFeatPaper), function(y) {tmp = getGp(x, y); if(is.null(tmp)) NA else tmp}))}))
+plotExplore(hypYang, features = colocFeatPaper, Cex = CexPlot, ppps = PpsALcol[seq_len(numPPsYang)], Cex.main = CexMain, Mar = MarYang, CexLegend = CexLegendYang, CexLegendMain = CexLegendMainYang)
+dev.off()
+```
+
+\clearpage
+
+### Comparison with \spicy and neighbourhood enrichment \label{sec:spiat}
+
+```{r spicyR}
+minObs = 20
+if(!file.exists(spicyFileYang <- "Results/spicyYang.RData")){
+    load("Data/Yang2023.RData")
+    df = Reduce(rbind,lapply(seq_len(nrow(hypYang)), function(x){
+        data.frame(coords(hypYang[x, "ppp", drop = TRUE]), marks(hypYang[x, "ppp", drop = TRUE]), hypYang[x, "day", drop = TRUE],
+                   hypYang[x, "root", drop = TRUE], hypYang[x, "section", drop = TRUE], hypYang[x, "drs", drop = TRUE])
+    }))
+    colnames(df)[7:10] = c("day", "root", "section", "imageID")
+    tab = table(df$gene, df$imageID)
+    genesSpic = rownames(tab)[rowSums(tab!=0) >= minObs ]
+    df = df[df$gene %in% genesSpic,]
+    seYang = SpatialExperiment(assays = matrix(0, 1, nrow(df)), colData = df[, c("gene", "day", "root", "imageID", "x", "y")], spatialCoordsNames = c("x", "y"), sample_id = "imageID")
+    spicyTime = spicy(seYang, condition = "day", subject = 'root', imageIDCol = "imageID", cellTypeCol = "gene", rep(genesSpic, times = length(genesSpic)), to = rep(genesSpic, each = length(genesSpic)))
+    spicyTime$pairwiseAssoc = lapply(spicyTime$pairwiseAssoc, function(x){
+        names(x) = hypYang[, "drs", drop = TRUE];x
+    })
+    save(spicyTime, file = spicyFileYang)
+} else load(spicyFileYang)
+# Fit the mixed models again
+if(!file.exists(spicyFileYangPvals <- "Results/spicyYangPvals.RData")){
+    pValsYangSpicy = mclapply(mc.cores = nCores, names(spicyTime$weights), function(genePair){
+        dfYang = data.frame("u" = spicyTime$pairwiseAssoc[[genePair]], "weight" = spicyTime$weights[[genePair]], 
+                            hypYang[, c("root", "day")])
+        if(sum(!is.na(dfYang$u)) < 5){
+                    return(NULL)
+        }
+        dfYang$u[is.na(dfYang$u)] = 0 #Following spicyR
+        modSpicy = try(lmerTest::lmer(u ~ day + (1|root), data = dfYang, weights = weight, contrasts = list("day" = "contr.sum")), 
+                       silent = TRUE)
+        if(is(modSpicy, "try-error")) {
+            return(matrix(NA, 2, 2, dimnames = list(c("(Intercept)", "day1"), c("Estimate", "Pr(>|t|)")))) 
+        } else summary(modSpicy)$coef[, c("Estimate", "Pr(>|t|)")]
+    });names(pValsYangSpicy) = names(spicyTime$weights)
+    save(file = spicyFileYangPvals, pValsYangSpicy)
+} else load(spicyFileYangPvals)
+#Compare P-values
+nativePvals = spicyTime$p.value
+#Same results for day, different for intercept
+spicyNames = gsub("--", "__", rownames(resYang$Intercept.nnPair))
+subPspicy = sapply(spicyNames, function(y) getGp(pValsYangSpicy, y, Collapse = "__")[, c("Pr(>|t|)", "Estimate")])
+id = sapply(subPspicy, length) > 0
+subPspicyMat = matrix(unlist(subPspicy[id]), byrow=  TRUE, ncol = 4, dimnames = list(names(subPspicy)[id], paste0("spicy_", c("Intercept_pVal", "day1_pVal", "Intercept", "day1"))))
+baa = gsub("__", "--", rownames(subPspicyMat))
+joinMat = cbind(subPspicyMat,resYang$Intercept.nnPair[baa, c("Estimate", "pVal")],
+          resYang$day.nnPair[baa, c("dayday0", "pVal")])
+rownames(joinMat) = baa
+colnames(joinMat)[5:6] = paste0("Intercept_", colnames(joinMat)[5:6])
+colnames(joinMat)[7:8] = paste0("day_", colnames(joinMat)[7:8])
+colnames(joinMat)[5:8] = paste0("smoppix_", colnames(joinMat)[5:8])
+```
+
+```{r genePairsNamed}
+minSpicyIntPos = names(which.min(joinMat[joinMat[,"spicy_Intercept"] > 0, "spicy_Intercept_pVal"]))
+minPIIntPos = names(which.min(joinMat[joinMat[,"smoppix_Intercept_Estimate"] < 0.5, "smoppix_Intercept_pVal"]))
+minSpicyIntNeg = names(which.min(joinMat[joinMat[,"spicy_Intercept"] < 0, "spicy_Intercept_pVal"]))
+minPIIntNeg = names(which.min(joinMat[joinMat[,"smoppix_Intercept_Estimate"] > 0.5, "smoppix_Intercept_pVal"]))
+```
+
+```{r vennSpciy, fig.width = 8.5, fig.height = 5.7, fig.cap = "Venn diagram of co- and antilocalized transcripts in the dataset by \\textcite{Yang2023} according to \\emph{smoppix} and \\emph{spicyR}.\\label{fig:vennSpicy}"}
+for(i in grep("pVal", colnames(joinMat), value = TRUE)){
+    joinMat = cbind(joinMat, p.adjust(joinMat[, i], method = "BH"))
+    colnames(joinMat)[ncol(joinMat)] = gsub("pVal", "pAdj", i)
+}
+venn(list("Colocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] < 0.5 & 
+                                                         joinMat[,"smoppix_Intercept_pAdj"] < sigLevel], 
+          "Colocalized\nspicyR" = colocSpic <- rownames(joinMat)[joinMat[,"spicy_Intercept"] > 0 & !is.na(joinMat[,"spicy_Intercept"]) & 
+                                                         joinMat[,"spicy_Intercept_pAdj"] < sigLevel],
+            "Antilocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] > 0.5 & joinMat[,"smoppix_Intercept_pAdj"] < sigLevel],
+          "Antilocalized\nspicyR" = antilocSpic <- rownames(joinMat)[joinMat[,"spicy_Intercept"] < 0 & !is.na(joinMat[,"spicy_Intercept"]) & joinMat[,"spicy_Intercept_pAdj"] < sigLevel]))
+#transcript pairs to plot
+antiSpicyR = names(which.min(joinMat[joinMat[, "smoppix_Intercept_pAdj"] < sigLevel &
+                                         joinMat[, "spicy_Intercept"] < 0,"spicy_Intercept_pVal"]))
+colSpicyR = names(which.min(joinMat[joinMat[, "smoppix_Intercept_pAdj"] < sigLevel &
+                                         joinMat[, "spicy_Intercept"] > 0,"spicy_Intercept_pVal"]))
+```
+
+The overlap between the results of \smop and \spicy \parencite{Canete2022} is shown in \fref{fig:vennSpicy}. As an example of different results, _smoppix_ does not consider SmCASP1--SmIAA9b significant, whereas _spicyR_ believes it is colocalized (see \fref{fig:yangSpicy2}). We also applied neighbourhood enrichment (NE), employing the \emph{average\_percentage\_of\_cells\_within\_radius} function from the \spiat package \parencite{Feng2023} to calculate the neighbourhood proportions $p_{gi}$. The Venn diagram with overlap in results with \smop is shown in \fref{fig:vennSpiat}, revealing that NE makes fewer discoveries than \spicy, but they correspond better to those of \smop than those of \spicy. The only gene pair with disagreement is shown in \fref{fig:otherSignSpiat}.
+
+```{r spicy2, fig.height = 9, fig.cap = paste("Transcript pair", colSpicyR, "which is considered colocalized by \\spicy but not significant in the \\smop analysis.\\label{fig:yangSpicy2}")}
+plotExplore(hypYang, features = colSpicyR, ppps = which(sapply(hypYang$tabObs, function(x){
+    all(x[sund(colSpicyR)]>0 & !is.na(x[sund(colSpicyR)]))
+})), Cex = 2, Cex.main = 0.7, numPps = numPPsYang)
+```
+
+```{r spiatYang}
+if(!file.exists(spiatYangFile <- "Results/spiatsYang.RData")){
+    spiatsYang = makeSpiatCellTypesHF(hypYang, varNames = c("day","root", "section", "drs"), sample_id = "drs")
+    names(spiatsYang) = rownames(hypYang)
+    save(spiatsYang, file = spiatYangFile)
+} else load(spiatYangFile)
+```
+
+```{r spiatYangRes}
+if(!file.exists(spiatYangResFile <- "Results/spiatYangRes.RData")){
+    spiatYangRes = spiatWrapper(spiatsYang, hypYang, nCores = nCores)
+    save(spiatYangRes, file = spiatYangResFile)
+} else load(spiatYangResFile)
+if(!file.exists(spiatYangLmmsFile <- "Results/spiatYangLmms.RData")){
+    dfSpiatYang = data.frame("prop" = NA, hypYang[, c("root", "day")])
+    YangspiatLms = mclapply(seq_len(nrow(spiatYangRes$loMat)), mc.preschedule = FALSE, mc.cores = nCores, function(j){
+           dfSpiatYang$prop = spiatYangRes$loMat[j,]
+           try({fit  = lmerTest::lmer("prop ~ day + (1|root)", data = dfSpiatYang, 
+                                contrasts = list(day = "contr.sum"), na.action = na.omit)
+           summary(fit)$coef})
+    })
+    names(YangspiatLms) = rownames(spiatYangRes$loMat)
+    save(YangspiatLms,file = spiatYangLmmsFile)
+} else load(spiatYangLmmsFile) 
+idLmm = sapply(YangspiatLms, is.matrix)
+idUniYang = with(spiatYangRes$gridFeat[idLmm,], gene1==gene2)
+spiatYangResMat = t(sapply(YangspiatLms[idLmm], function(x) x["(Intercept)",]))
+spiatYangResMatUni = spiatYangResMat[idUniYang,]
+spiatYangResMatUni = cbind(spiatYangResMatUni, "pAdj" = p.adjust(spiatYangResMatUni[, "Pr(>|t|)"]))
+spiatYangResMatUni = spiatYangResMatUni[order(spiatYangResMatUni[, "pAdj"]), ]
+spiatYangResMatBi = spiatYangResMat[!idUniYang,]
+spiatYangResMatBi = cbind(spiatYangResMatBi, "pAdj" = p.adjust(spiatYangResMatBi[, "Pr(>|t|)"]))
+spiatYangResMatBi = spiatYangResMatBi[order(spiatYangResMatBi[, "pAdj"]), ]
+#hist(spiatYangResMatUni[, "Pr(>|t|)"]);hist(spiatYangResMatBi[, "Pr(>|t|)"])
+```
+
+```{r vennSpiat, fig.width = 8.5, fig.height = 6,fig.cap = "Venn diagram of co- and antilocalized transcripts according to \\emph{smoppix} and NE.\\label{fig:vennSpiat}"}
+vennSpiat = venn(list("Colocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] < 0.5], 
+          "Enriched NE" = colocSpiat <- reverseGn(rownames(spiatYangResMatBi)[spiatYangResMatBi[,"Estimate"] > 0 & !is.na(spiatYangResMatBi[,"pAdj"]) & spiatYangResMatBi[,"pAdj"] < sigLevel]),
+            "Antilocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] > 0.5],
+          "Depleted NE" = antilocSpiat <-  reverseGn(rownames(spiatYangResMatBi)[spiatYangResMatBi[,"Estimate"] < 0 & !is.na(spiatYangResMatBi[,"pAdj"]) & spiatYangResMatBi[,"pAdj"] < sigLevel]))) 
+otherSignSpiat = attr(vennSpiat,"intersections")$`Colocalized\nsmoppix:Depleted NE`
+otherSignSpiatSplit = sund(otherSignSpiat)
+```
+
+```{r otherSignSPiat, fig.height = 9, fig.cap = paste0("Example of gene pair found antilocalized by \\smop but neighbourhood enriched by NE. In this case, the enrichment found by NE is mutual, i.e of ", otherSignSpiatSplit[1], " in the neighbourhood of ", otherSignSpiatSplit[2], " and vice versa.\\label{fig:otherSignSpiat}")}
+plotExplore(hypYang, otherSignSpiat[1], Cex = 3, Cex.main = 0.7, numPps = numPps) 
+```
+
+\clearpage
+
+### Confirmatory experiment with HCR RNA-FISH \label{sec:hcrfish}
+
+The results on smFISH data by \smop, \spicy, NE and the authors' original analysis for the eight genes chosen for HCR RNA-FISH confirmatory experiments for are shown in Table \ref{tab:canTable}. \spicy and the original analysis declare almost all gene pairs colocalized, whereas NE finds no significant results. \smop agrees with spicyR and the authors' analysis on colocalization of the pairs SmPINR–SmSGNa and SmPINS–SmSGNb (PI < 0.5 and adjusted p-value < 0.05), but declares the other pairs significantly antilocalized (PI > 0.5 and adjusted p < 0.05). The scatterplots of the smFISH experiment of the SmBIRDa--SmCYCD3;3a and SmPINR--SmSGNa are shown in \fref{fig:Yang} in the main text.
+
+```{r candidateshcrfish, results = "asis"}
+candidatesHCRfish = c("SmBIRDa--SmCYCD3;3a", "SmPINR--SmSGNa", "SmPINS--SmSGNb")
+candidatesHCRfish2 = c("SmBIRDa--SmCYCD3;3a", "SmPINR--SmSGNa", "SmPINS--SmSGNb", "SmRBRa--SmSCRa", "SmRBRa--SmSCRb", "SmBIRDa--SmSCRb", "SmSHRa--SmSCRb", "SmCYCD3;3a--SmSHRa")#Last ones are repeated
+canMat = data.frame(c(rep("Colocalized", 8)), joinMat[candidatesHCRfish2,c("smoppix_Intercept_Estimate", "smoppix_Intercept_pAdj", "spicy_Intercept", "spicy_Intercept_pAdj")], spiatYangResMatBi[candidatesHCRfish2, c("Estimate", "pAdj")])
+colnames(canMat) = c("Authors' analysis", "Smoppix PI", "Adj. p-value", "spicyR u-statistic", "Adj. p-value", "NE", "Adj. p-value")
+print.xtable(size = "footnotesize", xtable(canMat, align = "r|r|rr|rr|rr|", digits = c(1, 1, 2, 1, 1, 1, 2, 1), display = c("s", "s", "f", "e", "f", "e", "f", "e"), caption = "\\label{tab:canTable}Table of original results and \\smop, \\spicy and neighbourhood enrichment (NE) effect size estimates and adjusted p-values on smFISH data, for transcript pairs investigated further in HCR RNA-FISH experiments."), comment = FALSE)
+```
+
+HCR RNA-FISH was conducted as described previously \parencite{Oliva2022} and according to the manufacturer’s guidelines (\url{https://www.molecularinstruments.com/hcr-rnafish-protocols}). Probes for genes were designed and synthesized by Molecular Instruments (\url{www.molecularinstruments.com}). The Selaginella roots were fixed by 4% formalin-aceto-alcohol (FAA) and permeabilized by series of ethanol and methanol \parencite{Young2020}. Partial cell wall digestion was done with the enzyme mix described previously \parencite{Rozier2014, Oliva2022, Huang2023}. After enzyme digestion, roots were fixed in 10% (v/v) formaldehyde, Proteinase K treated and fixed in 10% (v/v) formaldehyde again. Cell wall staining occurred by 0.1\% Calcofluor White for 30 min in ClearSee, after which the samples were stored in ClearSee. Confocal imaging of roots was performed using a Zeiss LSM710 confocal microscope for the first experiment and a Leica Stellaris 5 confocal microscope for the second experiment, imaging green fluorophores by 561 nm excitation and 580-650 nm wavelength detection, red fluorophores by 633 nm excitation and 650-755 nm wavelength detection, and Calcofluor White by 405 nm excitation and 410-525 nm wavelength detection.
+
+Sample images per gene pair are shown in \fref{fig:YangConfocal} in the main text, the full stack of images can be found is available from the BioStudies repository with accession number S-BSST2022. As background correction, pixels falling below the average intensity plus two times the standard deviation of either colour channel were omitted before calculating Pearson correlations between pixels, similar to \textcite{Choi2014}. The relationship between the estimated Pearson correlation, its standard error and the z-coordinate are explored in Figures \ref{fig:scatterConf}-\ref{fig:scatterConf2}. Given its observed dependence on root and z-coordinate, we decided to model the Pearson correlation $\rho_{ig}$ in z-stack image $i$ of root $g$ using the following mixed-effects model:
+
+\begin{equation}
+\rho_{ig} = \beta_0 + \beta_zz_i +b_{gz}z_i + \sum_{r=1}^Rb_{gr}x_{ir} + \epsilon_i,
+\label{eq:mmHCRfish}
+\end{equation}
+with $z_i$ the mean-centered z-coordinates, $\beta_z$ the fixed effect slope, $b_{gz}$ the random slope of root $g$ and $b_{gr}$ the random intercept of root $r$ with $x_{ir}$ a dummy variable indicating root. Observation weights inversely proportional to the variances of the Pearson correlation estimates, as provided by the $cor.test$ function in the _stats_ R-package, are used in the mixed model. P-values were adjusted with Benjamini-Hochberg correction within each of the two HCR RNA-FISH experiments. The results of the test of the hypothesis $H_0: \beta_0 = 0$ on the eight selected gene pairs are shown in Table \ref{tab:pValConf} in the main text.
+
+```{r readInPngConf}
+if(!file.exists(confFile <- "Results/confocalCors.RData")){
+    confocalFolder = "Data/Yang2023/Confocal/FirstExperiment"
+    genePairs = list.files(confocalFolder, full.names = TRUE)
+    names(genePairs) = candidatesHCRfish
+    singleImages = lapply(genePairs, function(x){
+        cat(x, "\t")
+        images = list.files(x, full.names = TRUE)
+        names(images) = list.files(x)
+        Reduce(f = rbind, mclapply(mc.cores = 3, mc.preschedule = FALSE, names(images), function(yy){
+            y = images[yy]
+            pngFiles = list.files(y, full.names = TRUE, pattern = "c[:1|2:]{1}\\.png")
+            zStack = any(grepl("z", lf <- list.files(y,  pattern = "c[:1|2:]{1}\\.png")))
+            zcoordsAndCC = sapply(lf, function(xx){
+                undId = regexpr("_", xx)
+                cId = regexpr("c", xx)
+                c("z" = if(zStack) substr(xx, undId +1, cId - 1) else 1, 
+                  "cc" = substr(xx, cId, cId+1))
+            })
+            #Avoid having entire png files linger in memory
+            correlations = simplify2array(tapply(seq_along(pngFiles), zcoordsAndCC[ "z",], function(i){
+                  red = readPNG(pngFiles[i][1])[,,switch(zcoordsAndCC["cc", i][1], "c1" = 1, "c2" = 2)]
+                green = readPNG(pngFiles[i][2])[,,switch(zcoordsAndCC["cc",i][2], "c1" = 1, "c2" = 2)]
+                id = (idRed <- red > meanplus2sd(red)) | (idGreen <- green > meanplus2sd(green))
+                # Subset on both channels
+                ct = cor.test(c(red[id]), c(green[id])) # Pearson correlation
+                c("cor" = ct$estimate, "se" = ct$estimate/ct$statistic)
+            }, simplify = TRUE))
+            #In c1, first layer (red) contains signal, in c2 the second layer (green)
+            data.frame("Cor" = correlations[1,], "se" = correlations[2,], 
+                       "z" = paste0(yy, "_", zcoordsAndCC[ "z",][seq(1, ncol(zcoordsAndCC)-1, by = 2)]),
+                       "image" = yy)
+        }))
+    })
+    #Add z-coordinate
+    singleImages = lapply(singleImages, function(foo){
+        foo$zInt = sapply(foo$z, function(x) as.integer(sub("z", "", sub("_", "", substr(x, nchar(x)-1, nchar(x))))))
+        foo
+    })
+    #Mixed modelling
+    mmModsCor = lapply(singleImages, function(x){
+            x$w = 1/x$se^2;x$w = x$w/sum(x$w)
+            x$zInt = x$zInt - mean(x$zInt)
+            mod = lmerTest::lmer(data= x, "Cor ~ (zInt|image) + zInt", weights = w)
+            summary(mod)$coef
+            })
+    save(singleImages, mmModsCor, file = confFile)
+} else load(confFile)
+```
+
+```{r readInTif2}
+if(!file.exists(confFile2 <- "Results/confocalCors2.RData")){
+    confocalFolder = "Data/Yang2023/Confocal/SecondExperiment/Measurements"
+    genePairs = list.files(confocalFolder, full.names = TRUE)
+    names(genePairs) = candidatesHCRfish2
+    singleImages2 = lapply(genePairs, function(x){
+        cat(x, "\t")
+        images = list.files(x, full.names = TRUE)
+        names(images) = list.files(x)
+        Reduce(f = rbind, mclapply(mc.cores = 3, mc.preschedule = FALSE, names(images), function(yy){
+            y = images[yy]
+            tiffFiles = list.files(y, full.names = TRUE, pattern = "ch0[:1|2:]{1}(_SV)?\\.tif")
+            zStack = any(grepl("z", lf <- list.files(y,  pattern = "ch0[:1|2:]{1}(_SV)?\\.tif")))
+            zcoordsAndCC = sapply(lf, function(xx){
+                undId = regexpr("_z", xx)
+                cId = regexpr("ch0", xx)
+                c("z" = if(zStack) substr(xx, undId + 2, cId - 2) else 1, 
+                  "cc" = substr(xx, cId+3, cId+3))
+            })
+            #Avoid having entire png files linger in memory
+            correlations = simplify2array(tapply(seq_along(tiffFiles), zcoordsAndCC[ "z",], function(i){
+                red = readTIFF(tiffFiles[i][1])[,,switch(zcoordsAndCC["cc", i][1], "1" = 1, "2" = 2)]
+                green = readTIFF(tiffFiles[i][2])[,,switch(zcoordsAndCC["cc",i][2], "1" = 1, "2" = 2)]
+                idCoord = outer(seq_len(nrow(red)) < (nrow(red)-49),  seq_len(1024) > 150, FUN = "|")
+                #Cut out 50 micrometer sign, depending on the size of the image
+                id = ((idRed <- red > meanplus2sd(red)) | (idGreen <- green > meanplus2sd(green))) & idCoord
+                # Subset on both channels
+                ct = cor.test(c(red[id]), c(green[id])) # Pearson correlation
+                c("cor" = ct$estimate, "se" = ct$estimate/ct$statistic)
+            }, simplify = TRUE))
+            #In ch01, first layer (red) contains signal, in ch02 the second layer (green)
+            data.frame("Cor" = correlations[1,], "se" = correlations[2,], 
+                       "z" = paste0(yy, "_", zcoordsAndCC[ "z",][seq(1, ncol(zcoordsAndCC)-1, by = 2)]),
+                       "image" = yy)
+        }))
+    })
+    #Add z-coordinate
+    singleImages2 = lapply(singleImages2, function(foo){
+        foo$zInt = sapply(foo$z, function(x) as.integer(sub("z", "", sub("_", "", substr(x, nchar(x)-1, nchar(x)+1)))))
+        foo
+    })
+    #Mixed modelling
+    mmModsCor2 = lapply(singleImages2, function(x){
+            x$w = 1/x$se^2;x$w = x$w/sum(x$w)
+            x$zInt = x$zInt - mean(x$zInt)
+            mod = lmerTest::lmer(data= x, "Cor ~ (zInt|image) + zInt", weights = w)
+            summary(mod)$coef
+            })
+    save(singleImages2, mmModsCor2, file = confFile2)
+} else load(confFile2)
+```
+
+```{r plotZ, fig.cap = "Scatterplots of the estimated Pearson correlation (left column) and its standard error (middle column) as a function of z-coordinate, and the standard error as a function of Pearson correlation (right colum), coloured by root for the three transcript pairs (plot titles) for the first experiment. In the left plots, the dotted horizontal line indicates zero correlation.\\label{fig:scatterConf}", fig.height = 5.5}
+palette("Paired")
+par(mfrow = c(3,3), mar = c(4,4,2.5,4))
+tmp = lapply(names(singleImages), function(x){
+    with(singleImages[[x]], plot(zInt, Cor, col = factor(image), xlab = "z-coordinate", main = x, ylab = "Pearson correlation"))
+    abline(h=0, lty = "dotted")
+    with(singleImages[[x]], plot(zInt, se, col = factor(image), xlab = "z-coordinate", ylab = "Standard error", main = x))
+    with(singleImages[[x]], plot(Cor, main = x, se, col = factor(image), xlab = "Pearson correlation", ylab = "Standard error"))
+})
+par(mfrow = c(1,1))
+pVals = sapply(mmModsCor, function(x) x["(Intercept)", "Pr(>|t|)"])
+pAdj = p.adjust(pVals, method = "BH")
+```
+
+```{r plotZ2, fig.cap = "Scatterplots of the estimated Pearson correlation (left column) and its standard error (middle column) as a function of z-coordinate, and the standard error as a function of Pearson correlation (right column), coloured by root for the eight transcript pairs (plot titles) for the second experiment. In the left plots, the dotted horizontal line indicates zero correlation. The outlier for SmSHRa--SmSCRb corresponds to an image with little signal, which is downweighted in the analysis because of its high standard error.\\label{fig:scatterConf2}", fig.height = 11.5}
+par(mfrow = c(8,3), mar = c(2,3.9,2,0.5))
+tmp = lapply(names(singleImages2), function(x){
+    if(x==names(singleImages2)[length(singleImages2)]){
+        par(mar = c(4,3.9,2,0.5))
+    }
+    with(singleImages2[[x]], plot(zInt, Cor, col = factor(image), xlab = "z-coordinate", main = x, ylab = "Pearson correlation"))
+    abline(h=0, lty = "dotted")
+    with(singleImages2[[x]], plot(zInt, se, col = factor(image), main = x, xlab = "z-coordinate", ylab = "Standard error"))
+    with(singleImages2[[x]], plot(Cor, se, col = factor(image), main = x, xlab = "Pearson correlation", ylab = "Standard error"))
+})
+par(mfrow = c(1,1))
+pVals2 = sapply(mmModsCor2, function(x) x["(Intercept)", "Pr(>|t|)"])
+pAdj2 = p.adjust(pVals2, method = "BH")
+```
+
+```{r tabConf, results = "asis", include = FALSE}
+tabConf = cbind(t(simplify2array(mmModsCor)[1,c("Estimate", "Std. Error", "Pr(>|t|)"),]), "Adjusted p-value" = pAdj)
+colnames(tabConf)[2:3] = c("Standard error", "P-value")
+tabConf2 = cbind(t(simplify2array(mmModsCor2)[1,c("Estimate", "Std. Error", "Pr(>|t|)"),]), "Adjusted p-value" = pAdj2)
+colnames(tabConf2)[2:3] = c("Standard error", "P-value")
+rownames(tabConf2)[6:8] = gsub("--", "-", rownames(tabConf)[c(2,1,3)])
+tabConfOut = rbind(data.frame("Experiment" = "1", tabConf), data.frame("Experiment" = "2", tabConf2[c(7,6,8, 1:5),]))
+print.xtable(xtable(tabConfOut, display = c("s", "s", "f", "f", "e", "e"), caption = "\\label{tab:pValConf2}Mixed-model results for pixelwise correlation between transcript pairs in two HCR RNA-FISH experiments", digits = c(NA, NA, 3,3,1,1)), comment = FALSE)
+#SmSGNA-SmPINR: same global patterns, locally slightly different
+#SmSGNb-SmPINS: same, not significant in smFISH
+```
+
+\clearpage
+
+## \smop finds intracellular localization patterns in mouse fibroblast cells \label{sec:Eng}
+
+```{r locationData}
+if(!file.exists(pointLocFile <- "Data/pointLoc.RData")){
+    pointLoc = read.csv("Data/Eng2019/NIH3T3/CSVsMat.csv")
+    pointLoc = pointLoc[,-c(1, 6)]
+    pointLoc$group = with(pointLoc, paste(fov, experiment, sep = "_"))
+    # Cell combines experiment, fov and cell
+    save(pointLoc, file = pointLocFile)
+}
+if(!file.exists(pObjEngFile <- "Data/pObjEng.RData")){
+    load(pointLocFile)
+    pObjEng = ppp(x = pointLoc$x, y = pointLoc$y,
+                  marks = data.frame("gene" = pointLoc$gene, "fov" = as.character(pointLoc$fov),
+                                     "experiment" = as.character(pointLoc$experiment), "cellData" = as.character(pointLoc$cell)),
+                  xrange = range(pointLoc$x), yrange = range(pointLoc$y))
+    marks(pObjEng)$group = with(marks(pObjEng), paste(fov, experiment, sep = "_"))
+    pointLoc$cellData = pointLoc$cell
+    hypEng = buildHyperFrame(pointLoc, coordVars = c("x", "y"), imageVars = c("fov", "experiment"), coVars = c("gene", "cellData"))
+    fovs = 0:6;names(fovs) = fovs
+    #Download the rois
+    downloadAndUnzip("https://zenodo.org/records/2669683/files/ROIs_Experiment1_NIH3T3.zip", destfile = "Data/Eng2019/NIH3T3/ROIs_Experiment1_NIH3T3")
+    downloadAndUnzip("https://zenodo.org/records/2669683/files/ROIs_Experiment2_NIH3T3.zip", destfile = "Data/Eng2019/NIH3T3/ROIs_Experiment2_NIH3T3")
+    rois1 = lapply(fovs, function(fov){
+        rois = lapply(fils1 <- list.files(paste0("Data/Eng2019/NIH3T3/ROIs_Experiment1_NIH3T3/ALL_Roi/RoiSet_Pos", fov), full.names = TRUE), function(file){
+            read.ijroi(file)
+        })
+        centroids = sapply(fils1, function(file){
+             substr(file, 4, 14)
+        })
+        names(rois) = centroids
+        rois
+    })
+    names(rois1) = paste(names(rois1), "1", sep = "_")
+    fovs = 0:9;names(fovs) = fovs
+    rois2 = lapply(fovs, function(fov){
+        rois = lapply(fils2 <- list.files(paste0("Data/Eng2019/NIH3T3/ROIs_Experiment2_NIH3T3/ROIs/RoiSet_Pos", fov), full.names = TRUE), function(file){
+            read.ijroi(file)
+        })
+        centroids = sapply(fils2, function(file){
+             substr(file, 4, 14)
+        })
+        names(rois) = centroids
+        rois
+    })
+    names(rois2) = paste(names(rois2), "2", sep = "_")
+    EngRois = c(rois1, rois2)
+    hypEng = addCell(hypEng, EngRois)
+    #No perfect correspondence between cells provided and cells they really fall into
+    #Some overlap between owins has been found too
+    #Saving data for smoppix package
+    # Eng = pointLoc[, c("x", "y", "experiment", "fov", "gene")]
+    # Eng = Eng[Eng$gene %in% names(sort(table(Eng$gene), decreasing = TRUE))[seq_len(8)],]
+    # Eng = Eng[sample(nrow(Eng), 1e5, )]
+    # save(Eng, EngRois, file = "smoppix/data/Eng.RData")
+    save(hypEng, file = pObjEngFile)
+} else load(pObjEngFile)
+```
+
+```{r defUnique}
+unGenes <- getFeatures(hypEng); names(unGenes) = unGenes
+unEx = unique(hypEng[, "experiment", drop = TRUE]); names(unEx) = unEx
+unFov = unique(hypEng[, "fov", drop = TRUE]); names(unFov) = unFov
+```
+
+```{r engAna}
+if(!file.exists(EngFileOv <- "Results/EngFileOv.RData")){
+    EngListOv = estPis(hypEng, pis = c("edge", "centroid", "nnCell"), null = "CSR")
+    EngListOv = addWeightFunction(EngListOv)
+    EngListOvLmms = fitLMMs(EngListOv, fixedVars = "experiment", randomVars = "image")
+    save(EngListOv, EngListOvLmms, file = EngFileOv)
+}
+if(!file.exists(EngFileOvLmms <- "Results/EngFileOvLmms.RData")){
+    load(EngFileOv)
+    EngListOvLmms = fitLMMs(EngListOv, fixedVars = "experiment", randomVars = "image")
+    save(EngListOvLmms, file = EngFileOvLmms)
+} else {load(EngFileOvLmms)} 
+EngRes = lapply(names(EngListOvLmms),function(pi){getResults(EngListOvLmms, pi, "Intercept")})
+names(EngRes) = names(EngListOvLmms)
+```
+
+```{r timingsEng, eval = FALSE}
+register(SerialParam())
+timEng = system.time({
+    EngListOvTim <- estPis(hypEng, pis = c("nnPairCell"), null = "CSR", features = unGenes[1:10])
+    EngListOvTim = addWeightFunction(EngListOvTim)
+    EngListOvLmms = fitLMMs(EngListOvTim, fixedVars = "experiment", randomVars = "image")
+    })
+timEng8 = system.time(EngListOvTim <- estPis(hypEng, pis = c("nnPairCell"), null = "CSR", features = unGenes[1:8]))
+```
+
+We reanalysed a dataset by \textcite{Eng2019}, containing measurements of 10,000 genes in NIH/3T3 mouse fibroblast cells. Five z-slices with z-steps of 1 $\mu$m were taken across multiple fields of view (FOVs). To demonstrate robustness, the experiment was performed twice on separate sections (the experiment variable). The cells were gated by hand based on DAPI staining. Here we test for vicinity to and remoteness from cell wall and cell centroid and for within-cell aggregation for one gene at the time. No bivariate analyses were performed because they were too computationally intensive. \emph{smoppix} found `r sum(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5)` genes significantly close to the cell edge and `r sum(EngRes$centroid[, "pAdj"] < sigLevel & EngRes$centroid[, "Estimate"] < 0.5)` genes significantly close to the centroid compared to CSR wihtin the cell; the most significant ones in each case are shown in \fref{fig:Eng} in the main text. Also, \smop found `r sum(na.rm = TRUE, EngRes$nnCell[, "pAdj"] < sigLevel & EngRes$nnCell[, "Estimate"] < 0.5)` genes aggregated within the cell compared to CSR (see \fref{fig:aggCell}).
+
+```{r centroidCell, include = FALSE}
+numCellsEng = 30L
+pdf("GraphsPaper/Intracellular.pdf", height = 4.7)
+plotCells(hypEng, rownames(EngRes$edge)[c(which.min(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5), which.min(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] > 0.5))], nCells = numCellsEng, Cex = 1.5, warnPosition = FALSE)
+dev.off()
+```
+
+```{r aggCell, fig.height = 6, fig.cap = "Two genes most significantly aggregated within the cell according to \\smop. The cells are not shown in their original location in the section but rather sorted by expression.\\label{fig:aggCell}"}
+plotTopResults(hypEng, EngListOvLmms, pi = "nnCell", nCells = numCellsEng, warnPosition = FALSE)
+```
+
+### Authors' findings
+
+The spatial analysis in the original publication was based on pseudosegmentation into squares of 10 by 10 pixels, calculation of Pearson correlation on the resulting counts and hierarchical clustering. Three main clusters were thus identified: nuclear/perinuclear, cytoplasm and protrusions. An alternative analysis exploiting the full resolution of the data using latent factors was presented by \parencite{Walter2023}, finding similar clusters of genes. There is some overlap between genes found close to the centroid by \smop and in the nuclear/perinuclear region by the authors, and genes found close to the edge by \smop and in protrusions by the authors, respectively (\fref{fig:vennOverallFibro}). Yet there are also differences, e.g. genes found close to the centroid by \smop but not in the nuclear/perinuclear region by the original analysis (\fref{fig:smoppixCentroid}) or genes found enriched in the protrusions by the authors but not found close to the edge by \smop (\fref{fig:authorsProtrusions}). The latter tend to be lowly expressed genes, which may explain why \smop does not find sufficient evidence to call spatial patterning. And of course, enrichment in protrusions not exactly the same as vicinity to cell edge, and the nucleus and the centroid of the cell may not colocalize. Also, the authors' analysis looks for clusters of genes with similar spatial distribution, whereas \smop tests every gene independently.
+
+```{r authorFindings}
+#See Eng2019, extended data figure 3
+protrusMat = cbind("what" = "protrusion", "gene" = c("Cyb5r3", "Sh3pxd2a", "Ddr2", "Net1", "Trak2", "Kif1c", "Kctd10", "Dynll2", "Arhgap11a", "Gxylt1", "H6pd", "Gdf11", "Dync1li2", "Palld", "Ppfia1", "Naa50", "Ptgfr", "Zeb1", "Arhgap32", "Scd1"))
+nucMat = cbind("what" = "nuclear/perinuclear", "gene" = c("Col1a1", "Fn1", "Fbln2", "Col6a2", "Bgn", "Nid1", "Lox", "P4hb", "Aebp1", "Emp1", "Col5a1", "Sdc4", "Postn", "Col3a1", "Pdia6", "Col5a2", "Itgb1", "Calu", "Pdia3", "Cyr61"))
+cytoMat = cbind("what" = "Cytoplasm", "gene" = c("Ddb1", "Myh9", "Actn1", "Tagln2", "Kpnb1", "Hnrnpf", "Ppp1ca", "Hnrnpl", "Pcbp1", "Tagln", "Fscn1", "Psat1", "Cald1", "Snd1", "Uba1", "Hnrnpm", "Cap1", "Ssrp1", "Ugdh", "Caprin1"))
+sub1Mat = cbind("what" = "Subcluster 1", "gene" = c("Cyr61", "Thbs1", "Ctgf", "Serpine1", "Ptx3", "Tnc"))
+sub2Mat = cbind("what" = "Subcluster 2", "gene" = c("Flna", "Flnb", "Plec", "Flnc", "Iqgap1"))
+sub3Mat = cbind("what" = "Subcluster 3", "gene" = c("Bicd2", "Nin", "Pcnt", "Numa1", "Spdl1", "Ctif", "Cep350", "Trip11", "Gorasp2"))
+fullMat = rbind(protrusMat, nucMat, cytoMat, sub1Mat, sub2Mat, sub3Mat)
+```
+
+```{r onlysmoppixCentroid, fig.height = 6,fig.cap = "Example genes found close to the centroid by \\smop but not in nuclear/perinuclear region by the authors. The cells are not shown in their original location in the section but rather sorted by expression.\\label{fig:smoppixCentroid}"}
+smoppixEdge = rownames(EngRes$edge)[EngRes$edge[, "Estimate"] < 0.5 & EngRes$edge[, "pAdj"] <sigLevel]
+smoppixcentroid = rownames(EngRes$centroid)[EngRes$centroid[, "Estimate"] < 0.5 & EngRes$centroid[, "pAdj"] <sigLevel]
+onlyCentrsmoppix = setdiff(smoppixcentroid, protrusMat[, "gene"])
+smoppixAgg = rownames(EngRes$nnCell)[EngRes$nnCell[, "Estimate"] < 0.5 & EngRes$nnCell[, "pAdj"] <sigLevel & !is.na(EngRes$nnCell[, "pAdj"])]
+plotCells(hypEng, onlyCentrsmoppix[1:3], Cex = 1.8, nCells = numCellsEng, warnPosition = FALSE)
+```
+
+```{r onlyAuthorsProtrusions, fig.height = 6,fig.cap = "Example genes found in protrusions by the authors but not close to the edge by \\smop. The cells are not shown in their original location in the section but rather sorted by expression. \\label{fig:authorsProtrusions}"}
+onlyProtrusions = setdiff(protrusMat[, "gene"], smoppixEdge)
+plotCells(hypEng, onlyProtrusions[1:3], Cex = 2.25, nCells = numCellsEng, warnPosition = FALSE)
+```
+
+```{r vennEngFibroblasts, fig.width = 9.5, fig.height = 6.1, fig.cap = "Venn diagram of overlap between results from the authors and from \\smop.\\label{fig:vennOverallFibro}"}
+par(mar = c(2.75,3.3,1,1))
+venn(list("Close to\nedge smoppix" = smoppixEdge, "Protrusions\nauthors" = protrusMat[, "gene"], "Close to\ncentroid smoppix" = smoppixcentroid,  "Nuclear/perinuclear\nauthors" = nucMat[, "gene"], "Cytoplasm\nauthors" = cytoMat[, "gene"]))
+```
+
+\clearpage
+
+## \smop detects shifts in localization patterns over time in bacterial biofilms \label{sec:dar}
+
+\textcite{Dar2021} profiled \emph{Pseudomonas aeruginosa} biofilms for spatial expression of 108 genes after 10h of growth (7 replicates) and after 35h of growth (3 replicates). The biofilms were scanned at different depths (z-coordinates), although the lower and upper layers often yielded few molecules. The data were analysed in 2D here, so considering each z-plane as a separate replicate, and including a random effect for biofilm instance. We look for differences in spatial organisation between 10h and 35h. The transcript pair with most significant differential spatial localization between 10h and 35h is shown in \fref{fig:Dar} in the main text. Further differences between both conditions are shown here in Figures \ref{fig:strongDiffDar}-\ref{fig:strongDiffDarBi}, demonstrating \smop' ability to detect differences in spatial localization patterns between conditions.
+
+```{r darReadInCells}
+if(!file.exists(darCellsFile <- "Data/dar2021Cells.RData")){
+    darCellsList = lapply(c("10h" = 10, "35h" = 35), function(time){
+        cellFiles = list.files(paste0("Data/Dar2021/", time, "h_biofilms/segmentation"))
+        fileNames = sapply(cellFiles, substr, 1, 4)
+        cellFilesFull = list.files(full.names = TRUE, paste0("Data/Dar2021/", time, "h_biofilms/segmentation"))
+        names(cellFilesFull) = fileNames
+        lapply(cellFilesFull, function(x){
+            array = readMat(x)[[1]]
+            id = which(array!=0, arr.ind = TRUE)
+            colnames(id) = c("x", "y", "z")
+            xy = cbind(id, "cell" = array[id])
+        })
+    })
+    save(darCellsList, file = darCellsFile)
+}
+#Convert 3d point clouds to sets of 2d windows
+if(!file.exists(darWindowFile <- "Data/dar2021windowList.RData")){
+    load(darCellsFile)
+    #Convert all cells to lists of 2d windows. Leave z coordinates discrete
+    windowListDar = lapply(darCellsList, function(a){
+        mclapply(mc.cores = nCores, mc.preschedule = FALSE, a, function(b){
+            cellList = lapply(uc <- unique(b[, "cell"]), function(cell){
+                cellMat = b[b[, "cell"]==cell,,drop = FALSE]
+                zList = lapply(uz <- unique(cellMat[,"z"]), function(z){
+                    if(sum(id <- cellMat[, "z"]==z)<=2){
+                        return(NULL)
+                    }
+                    cellMatZ = cellMat[id, ,drop = FALSE]
+                    cellMatZ = cellMatZ[chull(cellMatZ[, c("x", "y")]),,drop = FALSE] #Subset to convex hull
+                    #X and y are flipped with respect to RNA molecules
+                    owin(xrange = range(cellMatZ[, "y"]), yrange = range(cellMatZ[, "x"]),
+                         poly = list(x = cellMatZ[, "y"], y = cellMatZ[, "x"]))
+                })
+                names(zList) = uz
+                Filter(zList, f = function(x) is(x, "owin"))
+            })
+            names(cellList) = uc
+            cellList
+        })
+    })
+    windowListDar = lapply(windowListDar, function(x){
+        lapply(x, function(y) Filter(y, f = length))
+    })
+    save(windowListDar, file = darWindowFile)
+}
+```
+
+```{r darReadIn}
+if(!file.exists(darSpotsFile <- "Data/dar2021.RData")){
+    darFiles10 = list.files("Data/Dar2021/10h_biofilms/spots_data", full.names = TRUE)
+    dar10List = lapply(darFiles10, function(x){
+        tmp = read.table(x, header = TRUE)
+        tmp$gene = gsub("_merged_spots.txt", "", gsub("Data/Dar2021/10h_biofilms/spots_data/", "", x))
+        tmp
+    })
+    dar10 = Reduce(dar10List, f = rbind)
+    darFiles35 = list.files("Data/Dar2021/35h_biofilms/spots_data", full.names = TRUE)
+    dar35List = lapply(darFiles35, function(x){
+        tmp = read.table(x, header = TRUE)
+        tmp$gene = gsub("_merged_spots.txt", "", gsub("Data/Dar2021/35h_biofilms/spots_data/", "", x))
+        tmp
+    })
+    dar35 = Reduce(dar35List, f = rbind)
+    x2 = c(dar10$spot_coord_i, dar35$spot_coord_i)
+    y2 = c(dar10$spot_coord_j, dar35$spot_coord_j)
+    z2 = c(dar10$spot_coord_z, dar35$spot_coord_z)
+    #Z coordinates are integers, others up to 0.1. Z-coordinates are not really independent
+    hypDar = buildHyperFrame(data.frame("x" = x2, "y" = y2, "z" = z2, "gene" = c(dar10$gene, dar35$gene), 
+                                        "fov" = c(dar10$spots_fov, dar35$spots_fov), 
+                                     "cell" = c(dar10$spots_cell_id, dar35$spots_cell_id), 
+                                     "time" = rep(c("10h", "35h"), times = c(nrow(dar10), nrow(dar35)))),
+                             coordVars = c("x", "y"), imageVars = c("z", "fov", "time"))
+    rownames(hypDar) = gsub(" ", "", apply(data.frame(hypDar[, c("fov", "time", "z")]), 1, paste, collapse = "_"))
+    #Add windows
+    load(darWindowFile)
+    winList2 = lapply(rownames(hypDar), function(i){
+        cellsNeeded = as.character(unique(marks(hypDar$ppp[[i]])$cell))
+        splitName = sund(i, sep = "_")
+        # #Look in flanking z-regions (see p13, central column, bottom in manuscript)
+        filWin = Filter(lapply(windowListDar[[splitName[[2]]]][[paste0("fov",splitName[[1]])]][cellsNeeded], 
+                               function(y) {
+                                   y[[which.min(abs(as.numeric(splitName[[3]])-as.numeric(names(y))))]]
+                                   #Choose closest z-stack with the cell in it
+                               }), f = is.owin)
+        filWin
+    })
+    names(winList2) = rownames(hypDar)
+    hypDar = addCell(hypDar, winList2, addCellMarkers = FALSE)
+    save(hypDar, file = darSpotsFile)
+} else {load(darSpotsFile)}
+unGenesDar = getFeatures(hypDar)
+names(unGenesDar) = unGenesDar
+mostExprGene = names(which.max(table(unlist(lapply(hypDar$ppp, function(x) marks(x, drop = FALSE)$gene)))))
+np = sapply(hypDar$ppp, npoints)
+id10h = tapply(rownames(hypDar)[hypDar$time == "10h"], hypDar$fov[hypDar$time == "10h"], function(x){
+    names(which.max(np[x]))
+})
+id35h = tapply(rownames(hypDar)[hypDar$time == "35h"], hypDar$fov[hypDar$time == "35h"], function(x){
+    names(which.max(np[x]))
+})
+hypDarSub = hypDar[c(id10h, id35h), ]#Point pattern with most events per fov
+hypDarSub = hypDarSub[order(hypDarSub$time),]
+darTabMat = matrix(0, nrow = nrow(hypDar), ncol = length(unGenesDar), dimnames = list(rownames(hypDar), unGenesDar))
+for(i in rownames(hypDar)){
+    darTabMat[i, names(hypDar[[i, "tabObs"]])] = hypDar[[i, "tabObs"]]
+}
+darRelMat = darTabMat/rowSums(darTabMat)
+tabTime = apply(darTabMat, 2, function(x) tapply(x, hypDar$time, sum))
+genesDarOut = unGenesDar[colSums(tabTime<100)>=1]
+rm(hypDar)
+getHypDarSub = function(genes){
+    id10h = tapply(rownames(hypDar)[hypDar$time == "10h"], hypDar$fov[hypDar$time == "10h"], function(x){
+        names(which.max(sapply(hypDar$tabObs[x], function(y) sum(y[genes]))))
+    })
+    id35h = tapply(rownames(hypDar)[hypDar$time == "35h"], hypDar$fov[hypDar$time == "35h"], function(x){
+        names(which.max(sapply(hypDar$tabObs[x], function(y) sum(y[genes]))))
+    })
+    hypDar[c(id10h, id35h), ]
+}
+```
+
+```{r DarOverall}
+if(!file.exists(DarOverallFile <- "Results/DarOverall.RData")){
+    load(darSpotsFile)
+    DarOverall = estPis(hypDar, pis = c("nn", "nnPair"))
+    DarOverall = addWeightFunction(DarOverall, designVars = c("fov", "time"))
+    DarLmms = fitLMMs(DarOverall, randomVars = "fov", fixedVars = "time")
+    save(DarOverall, DarLmms, file = DarOverallFile)
+} 
+if(!file.exists(lmmFile <- "Results/DarOverallLmm.RData")){
+    load(DarOverallFile)
+    save(DarLmms, file = lmmFile)
+} else load(lmmFile)
+#Remove lowly expressed genes
+DarLmms = lapply(DarLmms, function(x){
+    lapply(x["results"], function(y){
+        y$fixedEffects$time = y$fixedEffects$time[-unlist(sapply(genesDarOut, function(i) {
+            tmp = grep(i, rownames(y$fixedEffects$time))
+            if(length(tmp)) tmp else 0
+            })),]
+        y$Intercept = y$Intercept[-unlist(sapply(genesDarOut, function(i) {
+            tmp = grep(i, rownames(y$Intercept))
+            if(length(tmp)) tmp else 0
+            })),]
+        y
+    })
+}) 
+CexPlot = 2;psz = 3;Height = 4.6;Width = 7;CexLegend = 1.3;CexMain = 1.2; MarDar = c(1.5, 0.5, 3, 0.5)
+```
+
+```{r moreAgg10h, fig.cap = "Gene most significantly more regularly spaced at time 35h than 10h according to \\smop.\\label{fig:strongDiffDar}"}
+plotTopResults(hypDarSub, results = DarLmms, pi = "nn", effect = "time", Cex = CexPlot, Nrow = 3, numFeats = 1, what = "agg", effectParameter = "10h", CexLegend = CexLegend, Cex.main = CexMain)
+```
+
+```{r strongestAggDiff35, include = FALSE, fig.cap ="Gene most significantly more aggregated after 35h than after 10h according to \\smop.\\label{fig:strongAggDarBi}"}
+plotTopResults(hypDarSub, Nrow = 3, results = DarLmms, pi = "nn", effect = "time", numFeats = 1, what = "agg", effectParameter = "35h", Cex = CexPlot, CexLegend = CexLegend, Cex.main = CexMain)
+```
+
+```{r strongestMoreColoc10h, fig.cap ="Gene pair most significantly more antilocalized at time 35h than 10h according to \\smop.\\label{fig:strongDiffDarBi}"}
+plotTopResults(hypDarSub, Nrow = 3, results = DarLmms, pi = "nnPair", numFeats = 1, effect = "time", effectParameter = "10h", what = "coloc", Cex = CexPlot, CexLegend = CexLegend, Cex.main = CexMain)
+```
+
+```{r exportPaperColoc, fig.cap = "Gene pair most significantly more colocalized at time 35h than 10h \\label{fig:strongDiffDarBi2}", include = FALSE}
+pdf("GraphsPaper/darDiff.pdf", height = 6)
+plotTopResults(hypDarSub, Nrow = 3, results = DarLmms, pi = "nnPair", numFeats = 1, effect = "time", effectParameter = "35h", what = "coloc", Cex = CexPlot, CexLegend = CexLegend, Cex.main = CexMain, Mar = c(0.5, 0.1, 1, 0.1)) 
+dev.off() 
+```
+
+\clearpage
+
+### Authors' findings \label{sec:compUniDar}
+
+```{r authorGenes}
+Pis = names(DarLmms);names(Pis) = Pis
+DarRes = lapply(Pis, function(x) getResults(DarLmms, x, "Intercept"))
+DarResTime = lapply(Pis, function(x) getResults(DarLmms, x, "time"))
+uniAuthors = c("cdrA", "napA", "uspA", "fliC")
+tmp = cbind(DarRes$nn[uniAuthors,])
+tmpTime = DarResTime$nn[uniAuthors,] 
+```
+
+Here we compare \smop' results with the author's findings, obtained by pseudosegmentation and Pearson correlation analysis \parencite{Dar2021}. The authors found the _napA_ and _uspL_ genes to be expressed in a regularly spaced manner but at a low level in the 35h aggregates, yet we find no evidence for any spatial patterning (p-values `r signif(tmp["napA", "pVal"], 3)` and `r signif(tmp["uspA", "pVal"], 3)`, respectively). Also the _cdrA_ transcripts were found to be regularly distributed, we indeed find evidence for regularity (p-value = `r signif(tmp["cdrA", "pVal"], 3)`). The authors found the _fliC_ transcripts to be more regularly spaced after 35h. We find it to be regularly distributed at both timepoints, but more regular at 10h. The authors found anti-correlation between _fliC_ and _pilA_ (checkerboard pattern) at 10h, we can confirm this at both timepoints (p-value `r signif(getGp(DarRes$nnPair[, "pVal"], "fliC--pilA"), 3)`). Moreover, the original publication also found spatial correlation between anaerobic metabolism genes' transcripts, such as those in the denitrification pathway (narG-nirS-norB-nosZ), and the oxidative stress response genes katA, katB, and sodM \parencite{Dar2021}. \smop confirms colocalization patterns for most denitrification transcripts (see \fref{fig:denitri} for an example), and between _katB_ and _katA_, but not for the other oxidative stress transcripts. \smop also finds associations between oxidative stress and heat-shock protease expression (\fref{fig:oxstress}). Yet \smop finds no evidence of colocalization between the denitrification and oxidative stress transcripts. Moreover the authors found that the stress response pattern was also spatially correlated with heat-shock protease expression, including the membrane protease ftsH. \smop does not detect such patterns.
+
+```{r defGenesAll}
+denitri = c("narG", "nirS", "norB", "nosZ")
+oxStress = c("katA", "katB", "sodM")
+heatshock = "ftsH"
+authorGenes = c(denitri, oxStress, heatshock);
+authorGenePairs = makePairs(authorGenes)
+tmpColoc = t(sapply(authorGenePairs, function(x) getGp(DarRes$nnPair, x))) 
+tmpColocTime = t(sapply(authorGenePairs, function(x) getGp(DarResTime$nnPair, x)))
+colnames(tmpColoc)[colnames(tmpColoc)=="pAdj"] = "Adjusted p-value"
+```
+
+```{r denitriTable, results = "asis", include = FALSE}
+denitPairs = makePairs(denitri)
+print.xtable(xtable(tmpColoc[denitPairs, c("Estimate", "Adjusted p-value")], digits = 3, caption = "PI estimates and adjusted P-values for dentrification genes\\label{tab:denitri}"), comment = FALSE)
+```
+
+```{r denitri, fig.cap = "Denitrification gene pair with most significant colocalization according to \\smop.\\label{fig:denitri}"}
+plotExplore(hypDarSub,Nrow = 3,  names(which.min(tmpColoc[denitPairs,"Adjusted p-value"])))
+```
+
+```{r oxSTressTable, results = "asis", include = FALSE}
+oxstressPairs = makePairs(c(oxStress, heatshock))
+print.xtable(xtable(tmpColoc[oxstressPairs, c("Estimate", "Adjusted p-value")], digits = 3, caption = "PI estimates and adjusted P-values for oxidative stress genes and heat shock gene ftsH\\label{tab:oxstress}"), comment = FALSE)
+```
+
+```{r oxstressFig,fig.cap = "Oxidate stress gene (sodM) and heat shock gene (ftsH): the gene pair with most significant trancript colocalization according to \\smop.\\label{fig:oxstress}"}
+plotExplore(hypDarSub, Nrow = 3, "sodM--ftsH")
+```
+
+```{r oxSTressTableDenitri, results = "asis", include = FALSE}
+oxstressdenitriPairs = apply(expand.grid(denitri, oxStress), 1, paste, collapse = "--")
+print.xtable(xtable(tmpColoc[oxstressdenitriPairs, c("Estimate", "Adjusted p-value")], digits = 3, caption = "PI estimates and adjusted P-values for combination of denitrification and oxidative stress genes and heat shock gene ftsH.\\label{tab:oxstressDenitri}"), comment = FALSE)
+```
+
+\clearpage
+
+### Comparison with \spicy
+
+```{r spicyRDar}
+if(!file.exists(spicyFileDar <- "Results/spicyDar.RData")){
+    df = Reduce(rbind,lapply(seq_len(nrow(hypDar)), function(x){
+        data.frame(coords(hypDar[x, "ppp", drop = TRUE]),
+                   marks(hypDar[x, "ppp", drop = TRUE]),
+            hypDar[x, "fov", drop = TRUE], hypDar[x, "time", drop = TRUE], hypDar[x, "z", drop = TRUE])
+    }))
+    colnames(df)[5:7] = c("fov", "time", "z")
+    df$imageID = apply(df[,c("fov", "time", "z")], 1, )
+    seDar = SpatialExperiment(assays = matrix(0, 1, nrow(df)), colData = df[, c("fov", "time", "z", "imageID", "x", "y", "gene")],
+                               spatialCoordsNames = c("x", "y"))
+    spicyDay= spicy(seDar, condition = "time", imageIDCol = "imageID", verbose = TRUE,
+                      cellTypeCol = "gene", subject = "fov", BPPARAM = SerialParam())
+    save(spicyDay, file = spicyFileDar)
+    #Run on server
+} else load(spicyFileDar)
+if(!file.exists(spicyFileDarPvals <- "Results/spicyDarPvals.RData")){
+    pValsDarSpicy = lapply(names(spicyDay$weights), function(genePair){
+        dfDar = data.frame("u" = spicyDay$pairwiseAssoc[[genePair]], "weight" = spicyDay$weights[[genePair]], 
+                            hypDar[rownames(spicyDay$nCells), c("fov", "time")])
+        if(sum(!is.na(dfDar$u)) < 5){
+                    return(NULL)
+        }
+        dfDar$u[is.na(dfDar$u)] = 0 #Following spicyR
+        modSpicy = try(lmerTest::lmer(u ~ time + (1|fov), data = dfDar, weights = weight, contrasts = list("time" = "contr.sum")), 
+                       silent = TRUE)
+        if(is(modSpicy, "try-error")) {
+            return(matrix(NA, 2, 2, dimnames = list(c("(Intercept)", "day1"), c("Estimate", "Pr(>|t|)")))) 
+        } else summary(modSpicy)$coef[, c("Estimate", "Pr(>|t|)")]
+    });names(pValsDarSpicy) = names(spicyDay$weights)
+    save(file = spicyFileDarPvals, pValsDarSpicy)
+} else load(spicyFileDarPvals)
+```
+
+```{r histSpicy, fig.cap = "P-value histograms of spicyR.\\label{fig:histSpicyDar}", include = FALSE}
+MatSpicy = matrix(unlist(pValsDarSpicy), byrow=  TRUE, ncol = 4, dimnames = list(names(pValsDarSpicy), paste0("spicy_", c("Intercept", "time10h", "Intercept_pVal", "time10h_pVal"))))
+rownames(MatSpicy) = gsub("__", "--", rownames(MatSpicy))
+unGenesDar = getFeatures(hypDarSub)
+AggMatSpicy = MatSpicy[id <- match(paste(unGenesDar, unGenesDar, sep = "--"), rownames(MatSpicy), nomatch = 0),]
+rownames(AggMatSpicy) = sapply(rownames(AggMatSpicy), function(x) substr(x, 1, regexpr("--", x)-1))
+ColocMatSpicy = MatSpicy[-id, ]
+ColocMatSpicy = ColocMatSpicy[!apply(ColocMatSpicy, 1, anyNA),]
+par(mfrow = c(2,2))
+hist(AggMatSpicy[, "spicy_Intercept_pVal"], xlab = "P-value", main = "Univariate")
+hist(AggMatSpicy[, "spicy_time10h_pVal"], xlab = "P-value", main ="Difference in univariate")
+hist(ColocMatSpicy[, "spicy_Intercept_pVal"], xlab = "P-value", main = "Bivariate")
+hist(ColocMatSpicy[, "spicy_time10h_pVal"], xlab = "P-value", main = "Difference in bivariate")
+par(mfrow = c(1,1))
+```
+
+The overlap of findings of the univariate methods between \smop and \spicy is shown in \fref{fig:vennSpicyDar}; NE could not be applied to this dataset for computational reasons. \spicy's most significant findings are plotted in Figures \ref{fig:aggSpicy}-\ref{fig:regSpicy}.
+
+```{r vennSpicy, fig.height = 5.7, fig.cap = "Venn diagram of overlap between \\smop and \\spicy results for univariate analysis.\\label{fig:vennSpicyDar}"}
+AggMatSpicy = cbind(AggMatSpicy, "pAdj_Intercept"= p.adjust(AggMatSpicy[, "spicy_Intercept_pVal"], method = "BH"),
+                    "pAdj_time"= p.adjust(AggMatSpicy[, "spicy_time10h_pVal"], method = "BH"))
+vennSpicy = venn(list("spicyR\naggregated" = rownames(AggMatSpicy)[AggMatSpicy[, "pAdj_Intercept"] < sigLevel & AggMatSpicy[, "spicy_Intercept"] > 0],
+          "smoppix aggregated" = rownames(DarRes$nn)[DarRes$nn[, "pAdj"] < sigLevel & DarRes$nn[, "Estimate"] < 0.5],  
+          "spicyR regular" = rownames(AggMatSpicy)[AggMatSpicy[, "pAdj_Intercept"]  < sigLevel & AggMatSpicy[, "spicy_Intercept"]  < 0], 
+          "smoppix\nregular" = rownames(DarRes$nn)[DarRes$nn[, "pAdj"] < sigLevel & DarRes$nn[, "Estimate"] > 0.5]))
+diff22 = attr(vennSpicy,"intersections")$`spicyR\naggregated:smoppix\nregular`
+```
+
+```{r mostAggSpicy, fig.cap = "Most significantly aggregated gene according to \\spicy (also significant in the \\smop analysis).\\label{fig:aggSpicy}"}
+plotExplore(hypDarSub, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercept"] > 0, "spicy_Intercept_pVal"])), Nrow = 3) 
+```
+
+```{r mostRegSpicy, fig.cap = "Most significantly regular gene according to \\spicy (not significant for \\smop).\\label{fig:regSpicy}"}
+plotExplore(hypDarSub, Nrow = 3, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercept"] < 0, "spicy_Intercept_pVal"])))
+```
+
+```{r diffSpicy2, fig.cap = "Gene found aggregated by \\spicy but regular by \\smop\\label{fig:diffSpicy2}", fig.height = 7}
+plotExplore(hypDarSub,Nrow = 3,  rownames(DarRes$nn[diff22, "pAdj", drop = FALSE])[1], Cex = 0.8)
+```
+
+`r length(diff22)` genes were found to be aggregated by \spicy but regular according to smoppix, one example is shown in \fref{fig:diffSpicy2}. These results also reflect the difference in null hypothesis tested. \spicy considers only the densities of the genes themselves for estimating a baseline, whereas \smop considers the background of all other molecules as null. The Venn diagram for the bivariate analysis is shown in \fref{fig:vennSpicyBi}, with \spicy finding a lot of colocalization (see Figures \ref{fig:spicyColoc} and \ref{fig:spicyAntiloc} for most significant results), and smoppix more antilocalization. The gene found most significantly antilocalized by smoppix among the ones found colocalized by \spicy is shown in Figure \ref{fig:spicyDiffAntiloc}; especially at time 10h there are indeed regions with only one of both genes expressed.
+
+```{r vennSpicyColoc, fig.height = 5.7, fig.cap = "Venn diagram of overlap between \\smop and \\spicy results for bivariate analysis.\\label{fig:vennSpicyBi}"}
+ColocMatSpicy = cbind(ColocMatSpicy, "pAdj_Intercept"= p.adjust(ColocMatSpicy[, "spicy_Intercept_pVal"], method = "BH"),
+                    "pAdj_time"= p.adjust(ColocMatSpicy[, "spicy_time10h_pVal"], method = "BH"))
+vennSpicyColoc = venn(list("spicyR\ncolocalized" = rownames(ColocMatSpicy)[ColocMatSpicy[, "pAdj_Intercept"] < sigLevel & ColocMatSpicy[, "spicy_Intercept"] > 0],
+          "smoppix\ncolocalized" = rownames(DarRes$nnPair)[!is.na(DarRes$nnPair[, "pAdj"]) & DarRes$nnPair[, "pAdj"] < sigLevel & (DarRes$nnPair[, "Estimate"] < 0.5)],  
+          "spicyR\nantilocalized" = rownames(ColocMatSpicy)[ColocMatSpicy[, "pAdj_Intercept"]  < sigLevel & ColocMatSpicy[, "spicy_Intercept"]  < 0], 
+          "smoppix\nantilocalized" = rownames(DarRes$nnPair)[!is.na(DarRes$nnPair[, "pAdj"]) &DarRes$nnPair[, "pAdj"] < sigLevel & (DarRes$nnPair[, "Estimate"] > 0.5)]))
+diff1Bi = attr(vennSpicyColoc,"intersections")[["spicyR\nantilocalized:smoppix\ncolocalized"]]
+diff2Bi = attr(vennSpicyColoc,"intersections")[["spicyR\ncolocalized:smoppix\nantilocalized"]]
+```
+
+```{r mostColocSpicy, fig.cap = "Most significantly colocalized gene pair according to \\spicy (not significant for \\smop). \\label{fig:spicyColoc}"}
+plotExplore(hypDarSub,Nrow = 3,  colocSpicy <- names(which.min(ColocMatSpicy[ColocMatSpicy[, "spicy_Intercept"] > 0, "spicy_Intercept_pVal"])))
+```
+
+```{r mostAntiLocSpicy, fig.cap = "Most significantly antilocalized gene according to \\spicy (not significant for \\smop). \\label{fig:spicyAntiloc}"}
+plotExplore(hypDarSub, Nrow = 3, antiLocSpicy <- names(which.min(ColocMatSpicy[ColocMatSpicy[, "spicy_Intercept"] < 0, "spicy_Intercept_pVal"])))
+```
+
+```{r diffAntiLoc, fig.cap = "Most significantly antilocalized gene pair according to \\smop among the gene pairs colocalized according to \\spicy.\\label{fig:spicyDiffAntiloc}"}
+plotExplore(hypDarSub, Nrow = 3, names(which.min(DarRes$nnPair[diff2Bi, "pAdj"])))
+```
+
+\clearpage
+
+## Probabilistic indices serve as interpretable predictors in tumor classification
+
+We reanalysed a dataset on breast cancer sections from 33 patients \parencite{Keren2018}. Locations of 16 different cell types were measured in a single section per patient. The tumors were categorized into two classes, "compartimentalised" and "mixed" by the authors of the original article \parencite{Keren2018}. A plot highlighting the tumor cells is shown in \fref{fig:explTNBC} in the main text. In addition, the age of the patients was recorded, which shows an association to tumor type (\fref{fig:boxAge}). There are also differences in cell count across the tumor types (\fref{fig:boxCount}). Here we test whether PIs can distinguish between tumor types, and whether they can serve as interpretable predictors. 
+
+```{r TNBC}
+if(!file.exists(datFileTNBC <- "Data/TNBC.RData")){
+    data("TNBC_pheno");data("TNBC_meta") #From funkycells package
+    TNBC_pheno$age = TNBC_meta$Age[match(TNBC_pheno$Person, TNBC_meta$Person)]
+    tmp = TNBC_pheno$Class
+    tmp[tmp=="0"] = "mixed";tmp[tmp=="1"] = "compartimentalised"
+    TNBC_pheno$Class = tmp
+    hypTNBC = buildHyperFrame(TNBC_pheno, coordVars = c("cellx", "celly"), imageVars = c("Person", "Class", "age"), featureName = "Phenotype")
+    hypTNBC = hypTNBC[order(hypTNBC$Class),] #Order by class for plots
+    save(hypTNBC, file = datFileTNBC)
+} else load(datFileTNBC)
+if(!file.exists(piTNBCfile <- "Results/piTNBC.RData")){
+    pisTNBC = estPis(hypTNBC, pis = c("nn", "nnPair"), null = "background")
+    pisTNBC = addWeightFunction(pisTNBC)
+    TNBClmms = fitLMMs(pisTNBC, fixedVars = c("age", "Class"))
+    #Age is still a factor
+    save(pisTNBC, TNBClmms, file = piTNBCfile)
+} else load(piTNBCfile)
+```
+
+```{r explTNBC, fig.cap = "Exploratory plot of breast cancer data.\\label{fig:explTNBC}", include = FALSE}
+#Cell counts
+cellCounts = matrix(0, nrow(pisTNBC$hypFrame), length(getFeatures(pisTNBC$hypFrame)), 
+                    dimnames = list(pisTNBC$hypFrame$Person, getFeatures(pisTNBC$hypFrame)))
+for(to in as.character(pisTNBC$hypFrame$Person)){
+    cellCounts[to, names(pisTNBC$hypFrame[[which(pisTNBC$hypFrame$Person==to), "tabObs"]])] = pisTNBC$hypFrame[[which(pisTNBC$hypFrame$Person==to), "tabObs"]]
+}
+pdf("GraphsPaper/exploreTNBC.pdf", height = 5.8) 
+hypTNBCcopy = hypTNBC
+hypTNBCcopy$ppp = lapply(hypTNBCcopy$ppp, function(x){
+    marks(x)$gene[marks(x)$gene!= "Tumor"] = "Other cells"
+    marks(x)$gene[marks(x)$gene== "Tumor"] = "Tumor cells"
+    x
+})
+plotExplore(hypTNBCcopy, Cex.main = 0.64, features = c("Tumor cells", "Other cells"), Cols = c("Tumor cells" = "red", "Other cells" = "gray"), CexLegend = 0.85, CexLegendMain = 1, Cex = 0.8, Nrow = 5, Mar = c(0.3, 0.1, .7, 0.1), )
+dev.off() 
+rm(hypTNBCcopy)
+```
+
+```{r boxage, fig.cap = "Boxplot of age (y-axis) as a function of tumor type (x-axis).\\label{fig:boxAge}", fig.height = 3.5, fig.width = 4.5}
+boxplot(hypTNBC$age ~ hypTNBC$Class, ylab = "Age", xlab = "Tumor type")
+```
+
+```{r cellCounts, fig.cap = "Boxplots of cell counts (y-axis) as a function of tumor type (colour) for different cell types (x-axis).\\label{fig:boxCount}", fig.height = 4}
+dfcc = data.frame(cellCounts, "Tumor_type" = hypTNBC$Class)
+moltDfcc = melt(dfcc, id.vars = "Tumor_type")
+ggplot(data = moltDfcc, aes(y = value, x = variable, fill = Tumor_type)) +
+     geom_boxplot() + ylab("Cell count") + xlab("Cell type") + theme(axis.text.x = element_text(angle = 90))
+```
+
+\clearpage
+
+### Hypothesis tests
+
+Significant differences between tumor types according to \smop are shown in Table \ref{tab:smoptnbc}. The cell type pair most significantly more antilocalized in the "compartimentalised" type according to \smop (CD4T--tumor) is shown in \fref{fig:nnpairClass}. Significant differences between tumor types in neighbourhood enrichment tests are found in Table \ref{tab:spiattnbc}.
+
+```{r resClass1, fig.cap = "Cell type most significantly more aggregated in type 'compartimentalised' than in type 'mixed'.\\label{fig:nnClass}", eval  = FALSE}
+plotTopResults(hypFrame = hypTNBC, results = TNBClmms, pi = "nn", effect = "Class", effectParameter = "mixed", what = "reg", Cex.main = 0.9, Nrow = 5)
+```
+
+```{r resClass2, fig.cap = "Cell type pair most significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop.\\label{fig:nnpairClass}"}
+plotTopResults(hypFrame = hypTNBC, results = TNBClmms, pi = "nnPair", effect = "Class", effectParameter = "compartimentalised", what = "anti", numFeat =1, Cex.main = 0.9, Nrow = 5)
+#Indeed clear differences between classes
+```
+
+```{r resClass3, fig.cap = "Scatterplot of the only cell type pair not involving tumor cells that is significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop.\\label{fig:nnpairClass2}"}
+plotExplore(hypFrame = hypTNBC, "CD4T--Otherimmune", Cex.main = 0.9, Nrow = 5)
+```
+
+```{r fullResBi, results = "asis"}
+tabUni = getResults(TNBClmms, pi = "nn", "Class")
+tabBi = getResults(TNBClmms, pi = "nnPair", "Class")
+tabAll = rbind(tabUni[tabUni[, "pAdj"] < sigLevel,,drop = FALSE], tabBi[tabBi[, "pAdj"] < sigLevel,])
+colnames(tabAll) = gsub("Class", "Tumor type: ", colnames(tabAll))
+colnames(tabAll)[3:4] = c("P-value", "Adjusted p-value")
+print.xtable(xtable(tabAll, caption = "\\label{tab:smoptnbc}Table of univariate and bivariate localization patterns significantly different between tumor types according to \\smop. The first two columns show the coefficients of the tumor types in the sum coding scheme. For the bivariate patterns, the cell types are separated by hyphens.", digits = c(1,3,3,1,1), display = c("s", "f", "f", "e", "e")), comment = FALSE)
+```
+
+```{r spicyRtnbc}
+if(!file.exists(spicyVanderdoesFile <- "Results/spicyVanderdoes.RData")){
+    dfSpic = Reduce(rbind,lapply(seq_len(nrow(hypTNBC)), function(x){
+        data.frame(coords(hypTNBC[x, "ppp", drop = TRUE]), marks(hypTNBC[x, "ppp", drop = TRUE]), hypTNBC[x, c("Class", "Person", "age"), drop = TRUE])
+    }))
+    seTNBC = SpatialExperiment(assays = matrix(0, 1, nrow(dfSpic)), colData = dfSpic[, c("Class", "age", "Phenotype", "Person", "x", "y")], spatialCoordsNames = c("x", "y"), sample_id = "Person")
+    spicyVanderdoes = spicy(seTNBC, condition = "Class", covariates = "age", imageIDCol = "Person", cellTypeCol = "Phenotype")
+    save(spicyVanderdoes, dfSpic, file = spicyVanderdoesFile)
+} else load(spicyVanderdoesFile)
+```
+
+```{r tnbcspiat}
+if(!file.exists(spiatTNBCFile <- "Results/spiatsTNBC.RData")){
+    spiatsTNBC = makeSpiatCellTypesHF(hypTNBC, varNames = c("age","Class", "Person"), sample_id = "Person", geneName = "gene")
+    save(spiatsTNBC, file = spiatTNBCFile)
+} else load(spiatTNBCFile)
+RangeTNBC = median(vapply(hypTNBC$ppp, FUN.VALUE = double(1), function(x) max(apply(coords(x), 2, function(y) diff(range(y))))))/20 #Roughly following vignette
+if(!file.exists(spiatTNBCResFile <- "Results/TNBCSpiat.RData")){
+    TNBCspiat = spiatWrapper(spiatsTNBC, hypTNBC, nCores = nCores)
+    save(TNBCspiat, file = spiatTNBCResFile)
+} else load(spiatTNBCResFile)
+if(!file.exists(spiatTNBClmsFile <- "Results/TNBCSpiatLms.RData")){
+    dfSpiatTNBC = data.frame(prop = NA, hypTNBC[, c("age", "Class")])
+    TNBCspiatLms = mclapply(seq_len(nrow(TNBCspiat$loMat)), mc.cores = nCores, function(j){
+           dfSpiatTNBC$prop = TNBCspiat$loMat[j,]
+           fit = lm(prop ~ age + Class, data = dfSpiatTNBC)
+           summary(fit)$coef
+    })
+    names(TNBCspiatLms) = rownames(TNBCspiat$loMat)
+    save(TNBCspiatLms, file = spiatTNBClmsFile)
+} else load(spiatTNBClmsFile)
+```
+
+```{r signifSpiatTNBC}
+idUni = !grepl("--", rownames(TNBCspiat$loMat))
+classRes = t(sapply(TNBCspiatLms, function(x) x["Classmixed", c("Estimate", "Std. Error", "Pr(>|t|)")]))
+classUni = classRes[idUni,]
+pAdjUni = p.adjust(classUni[, "Pr(>|t|)"], method = "BH")
+uniSigSpiat = classUni[idUniSig <- (pAdjUni<sigLevel),,drop = FALSE]
+uniSigSpiat = cbind(uniSigSpiat, "Adjusted p-value" = pAdjUni[idUniSig])
+```
+
+```{r signifSpiatTNBCBI}
+classBi = classRes[!idUni,]  
+pAdjBi = p.adjust(classBi[, "Pr(>|t|)"], method = "BH")
+biSigSpiat = classBi[idBi <- pAdjBi<sigLevel,]
+biSigSpiat = cbind(biSigSpiat, "Adjusted p-value" = pAdjBi[idBi])
+ageRes = t(sapply(TNBCspiatLms, function(x) x["age", c("Estimate", "Std. Error", "Pr(>|t|)")]))
+```
+
+```{r spiatSignif, results  ="asis"}
+totTab = rbind(uniSigSpiat, biSigSpiat) 
+colnames(totTab)[2:3] = c("Standard error", "P-value")
+print.xtable(xtable(totTab, caption = "\\label{tab:spiattnbc}Table of significant differences in univariate and bivariate neighbourhood enrichments between tumor types. The coefficients shown are the average difference in log-ratio of the proportion of molecules in the neighbourhood over overall in the image, of the 'mixed' tumors minus the 'compartimentalised' tumors. For the bivariate results (cell type pairs separated by hyphens), the estimate refers to enrichment of the second cell type in the vicinity of the first.", digits = 2,  display = c("s", "f", "f", "e", "e")), comment = FALSE)
+```
+
+```{r compareSpicySmoppixVanderdoes, fig.cap = "Boxplots of univariate nearest-neighbour distance PI by \\smop (left), u-statistic by \\textit{spicyR} (center) and NE log-ratio (right) (y-axis) as a function of tumor type (x-axis) for tumor cells. The difference is pronounced for \\smop and NE, which capture the aggregation of tumor cells as seen from \\fref{fig:explTNBC} in the main text. The difference in \\textit{spicyR}'s test statistic is less pronounced and even suggests stronger aggregation of tumor cells in the mixed class.\\label{fig:diffVanderdoes}", fig.height = 4.25}
+par(mfrow = c(1,3), mar = c(4,5,4,2)) 
+tumorDfPi = buildDataFrame(pisTNBC, gene = "Tumor", pi = "nn")
+boxplot(tumorDfPi$pi ~ tumorDfPi$Class, ylab = "Nearest-neighbour probabilistic index", xlab = "Tumor type", main = "smoppix")
+tumorUs = spicyVanderdoes$pairwiseAssoc$Tumor__Tumor
+boxplot(tumorUs ~ hypTNBC$Class, ylab = "Univariate u-statistic", xlab = "Tumor type", main = "spicyR")
+boxplot(TNBCspiat$loMat["Tumor",]~ hypTNBC$Class, ylab = "Log-ratio of average percentage of cells in neighbourhood\nrelative to baseline", xlab = "Tumor type", main = "NE")
+par(mfrow = c(1,1))
+```
+
+\clearpage
+
+### Prediction models \label{sec:predModels}
+
+Next we investigate whether the inclusion of PI's as predictor of the tumor type, on top of age and cell type count, improves predictive accuracy. We use a penalized linear regression model (LASSO) \parencite{Tibshirani1996} implemented in the _glmnet_ package \parencite{Friedman2010} as prediction model, and assess its predictive accuracy (defined as the proportion of correctly classified tumors) through 20-fold cross-validation. The penalty parameter $\lambda$ is tuned through an inner cross-validation loop. The following sets of predictors are used in the model: patient age is always included as predictor, and cell counts or PIs or both are included in additional models. When only age is included, a regular generalized linear model is used for prediction, without regularization. As feature selection procedure for the PIs, \smop is applied to the observations in the training folds with tumor type and age as fixed effects, and PIs significantly associated with tumor type are retained as predictors for the LASSO model; their missing values are set to 0.5. The splitting into folds was repeated 200 times, out-of-sample accuracy and its standard error were estimated following \textcite{Bates2023}. The results are shown in Table \ref{tab:acc} in the main text, and confirm that spatial localization patterns add information on tumor type on top of cell counts and patient age. A similar analysis was carried out for NE log-ratios as predictors, yielding similar results to the PIs as shown in Table \ref{tab:accAlt}. Since \spicy does not declare any cell types significant, no cell type (pairs) were filtered out and all u-statistics are fed as predictors to the LASSO model. Yet inclusion of these u-statistics deteriorates the predictive performance (see Table \ref{tab:accAlt}).
+
+```{r fitCVsave}
+nFolds = 20;nReps = 200;nPCs = 3
+exprNames = paste0("expr.", colnames(cellCounts))
+if(!file.exists(tnbcCVfile <- "Results/cvTNBC.RData")){
+    register(SerialParam())
+    cvRes = mclapply(mc.cores = nCores, seq_len(nReps), function(i){
+        foldsList = split(seq_len(nrow(hypTNBC)), f = f <- sample(rep(seq_len(nFolds), length.out = nrow(hypTNBC))))
+        if(!file.exists(cvFile <- paste0("Results/cvTNBC/rep", i, ".RData"))){
+            cvResOut = lapply(seq_along(foldsList), function(ff){
+                eOut = estMissClass(dat = pisTNBC, idTest = foldsList[[ff]], nFolds = nFolds, cellCounts = cellCounts)
+                obsIn = nrow(hypTNBC) - length(foldsList[[ff]])
+                foldsListIn = split(seq_len(obsIn), f = f <- sample(rep(seq_len(nFolds-1), length.out = obsIn)))
+                eIn = Reduce(f= rbind, lapply(foldsListIn, function(fff){
+                    tmp = pisTNBC
+                    tmp$hypFrame = tmp$hypFrame[-foldsList[[ff]],]
+                    estMissClass(dat = tmp, idTest = fff, nFolds = nFolds- 1, cellCounts = cellCounts[-foldsList[[ff]],])
+                }))
+                a = (colMeans(eIn)-colMeans(eOut))^2
+                b = apply(eOut, 2, var)/nrow(eOut)
+                list("a" = a, "b" = b, "eIn" = eIn, "eOut" = eOut)
+            })
+        save(cvResOut, file = cvFile)
+        } else load(cvFile)
+        cvResOut
+    })
+    save(cvRes, file = tnbcCVfile)
+} else load(tnbcCVfile)
+```
+
+```{r processFitCV}
+ErrNCV = rowMeans(vapply(cvRes, FUN.VALUE = double(4), function(cvResOut){
+    rowMeans(vapply(cvResOut, FUN.VALUE = double(4), function(x){
+        colMeans(x$eIn)
+    }))
+}))
+ErrCV = rowMeans(vapply(cvRes, FUN.VALUE = double(4), function(cvResOut){
+    rowMeans(vapply(cvResOut, FUN.VALUE = double(4), function(x){
+        colMeans(x$eOut)
+    }))
+}))
+Bias = (1+(nFolds-2)/nFolds)*(ErrNCV-ErrCV)
+ErrNCVBC = ErrNCV - Bias#Bias correction
+MSEhat = rowMeans(vapply(cvRes, FUN.VALUE = double(4), function(cvResOut){
+    rowMeans(vapply(cvResOut, FUN.VALUE = double(4), function(x){
+        x$a-x$b
+    }), na.rm = TRUE)
+}))
+SEest = sqrt(sapply(MSEhat, function(y) max(0, nFolds/(nFolds-1)*y)))
+errOuter = Reduce(f = rbind, lapply(cvRes, function(cvResOut){
+    Reduce(lapply(cvResOut, function(x){
+       x$eOut
+    }), f = rbind)
+}))
+naiveRMSE = apply(errOuter, 2, sd)/sqrt(nrow(hypTNBC))
+maxMSE = naiveRMSE * sqrt(nFolds)
+SEest[SEest > maxMSE] = maxMSE[SEest > maxMSE]
+SEest[SEest < naiveRMSE] = naiveRMSE[SEest < naiveRMSE]
+cvMat = cbind("Accuracy" = ErrNCVBC, "SE" = SEest)
+rownames(cvMat) = c("Age", "Age + cell count", "Age + cell count + PI", "Age + PI")
+```
+
+```{r fitCV, results = "asis", include = FALSE}
+cvMat = cvMat[c("Age", "Age + cell count", "Age + PI", "Age + cell count + PI"),]
+print.xtable(comment = FALSE, xtable(t(cvMat), caption = "Average predictive accuracy over 200 repeats of the split into cross-validation folds for LASSO regression models with different sets of predictors (column names). Standard errors (SE) of the estimates are shown in the second row.\\label{tab:acc}"))
+
+print.xtable(comment = FALSE, xtable(cvMat, caption = "Average predictive accuracy over 200 repeats of the split into cross-validation folds for LASSO regression models with different sets of predictors (column names). Standard errors (SE) of the estimates are shown in the second row.\\label{tab:acc}"))
+```
+
+```{r fitCVsavespicyNE}
+if(!file.exists(tnbcCVfilespicyNE <- "Results/cvTNBCspicyNE.RData")){
+    register(SerialParam())
+    cvResspicyNE = mclapply(mc.cores = nCores, seq_len(nReps), function(i){
+        foldsList = split(seq_len(nrow(hypTNBC)), f = f <- sample(rep(seq_len(nFolds), length.out = nrow(hypTNBC))))
+        if(!file.exists(cvFile <- paste0("Results/cvTNBCspicyNE/rep", i, ".RData"))){
+            cvResOut = lapply(seq_along(foldsList), function(ff){
+                    eOut = estMissClass(dat = pisTNBC, idTest = foldsList[[ff]], nFolds = nFolds, 
+                                        cellCounts = cellCounts, what ="NE", loMat = TNBCspiat$loMat)
+                    obsIn = nrow(hypTNBC) - length(foldsList[[ff]])
+                    foldsListIn = split(seq_len(obsIn), f = f <- sample(rep(seq_len(nFolds-1), length.out = obsIn)))
+                    eIn = Reduce(f= rbind, lapply(foldsListIn, function(fff){
+                        tmp = pisTNBC
+                        tmp$hypFrame = tmp$hypFrame[-foldsList[[ff]],]
+                        estMissClass(dat = tmp, loMat = TNBCspiat$loMat[,-foldsList[[ff]]], idTest = fff, nFolds = nFolds- 1, cellCounts = cellCounts[-foldsList[[ff]],], what = "NE")
+                    }))
+                    a = (colMeans(eIn)-colMeans(eOut))^2
+                    b = apply(eOut, 2, var)/nrow(eOut)
+                    NEList = list("a" = a, "b" = b, "eIn" = eIn, "eOut" = eOut)
+                    eOutSpic = estMissClass(dat = pisTNBC, idTest = foldsList[[ff]], nFolds = nFolds, 
+                    cellCounts = cellCounts, what = "spicy", dfSpic = as.data.frame(spicyVanderdoes$pairwiseAssoc))
+                    eInSpic = Reduce(f= rbind, lapply(foldsListIn, function(fff){
+                        tmp = pisTNBC
+                        tmp$hypFrame = tmp$hypFrame[-foldsList[[ff]],]
+                        estMissClass(dat = tmp, dfSpic = as.data.frame(spicyVanderdoes$pairwiseAssoc)[!(pisTNBC$hypFrame$Person %in% pisTNBC$hypFrame$Person[foldsList[[ff]]]), ], idTest = fff, nFolds = nFolds- 1, cellCounts = cellCounts[-foldsList[[ff]],], what = "spicy")
+                    }))
+                    aSpic = (colMeans(eInSpic)-colMeans(eOutSpic))^2
+                    bSpic = apply(eOutSpic, 2, var)/nrow(eOutSpic)
+                    SpicList = list("a" = aSpic, "b" = bSpic, "eIn" = eInSpic, "eOut" = eOutSpic)
+                    list("NEList" = NEList, "SpicList" = SpicList)
+            })
+        save(cvResOut, file = cvFile)
+        } else load(cvFile)
+        cvResOut
+    })
+    save(cvResspicyNE, file = tnbcCVfilespicyNE)
+} else load(tnbcCVfilespicyNE) 
+```
+
+```{r processFitCVNE}
+ErrNCVAlt = rowMeans(vapply(cvResspicyNE, FUN.VALUE = double(8), function(cvResOut){
+    rowMeans(vapply(cvResOut, FUN.VALUE = double(8), function(x){
+        c(colMeans(x$NEList$eIn), colMeans(x$SpicList$eIn))
+    }))
+}))
+ErrCVAlt = rowMeans(vapply(cvResspicyNE, FUN.VALUE = double(8), function(cvResOut){
+    rowMeans(vapply(cvResOut, FUN.VALUE = double(8), function(x){
+        c(colMeans(x$NEList$eOut), colMeans(x$SpicList$eOut))
+    }))
+}))
+Bias = (1+(nFolds-2)/nFolds)*(ErrNCVAlt-ErrCVAlt)
+ErrNCVBCAlt = ErrNCVAlt - Bias#Bias correction
+MSEhatAlt = rowMeans(vapply(cvResspicyNE, FUN.VALUE = double(8), function(cvResOut){
+    rowMeans(vapply(cvResOut, FUN.VALUE = double(8), function(x){
+        c(x$NEList$a-x$NEList$b, x$NEList$a-x$NEList$b)
+    }), na.rm = TRUE)
+}))
+SEestAlt = sqrt(sapply(MSEhatAlt, function(y) max(0, nFolds/(nFolds-1)*y)))
+errOuterAlt = Reduce(f = rbind, lapply(cvResspicyNE, function(cvResOut){
+    Reduce(lapply(cvResOut, function(x){
+       cbind(x$NEList$eOut, x$SpicList$eOut)
+    }), f = rbind)
+}))
+naiveRMSEAlt = apply(errOuterAlt, 2, sd)/sqrt(nrow(hypTNBC))
+maxMSEAlt = naiveRMSEAlt * sqrt(nFolds)
+SEestAlt[SEestAlt > maxMSEAlt] = maxMSEAlt[SEestAlt > maxMSEAlt]
+SEestAlt[SEestAlt < naiveRMSEAlt] = naiveRMSEAlt[SEestAlt < naiveRMSEAlt]
+cvMatAlt = cbind("Accuracy" = ErrNCVBCAlt, "SE" = SEestAlt)
+rownames(cvMatAlt) = c("Age", "Age + cell count", "Age + cell count + NE log-ratio", "Age + NE log-ratio", 
+                    "Age2", "Age + cell count2", "Age + cell count + spicyR u", "Age + spicyR u")
+```
+
+```{r fitCValt, results = "asis"}
+cvMatAlt = cvMatAlt[c("Age + NE log-ratio", "Age + cell count + NE log-ratio", "Age + spicyR u", "Age + cell count + spicyR u"),]
+print.xtable(comment = FALSE, xtable(t(cvMatAlt), caption = "Average predictive accuracy over 200 repeats of the split into cross-validation folds for LASSO regression models with different sets of predictors (column names) derived from NE and \\spicy. Standard errors (SE) of the accuracy estimates are shown in the second row. For \\spicy, no preliminary feature filtering through hypothesis testing was applied.\\label{tab:accAlt}", align = "|r|c|c|c|c|"))
+```
+
+\clearpage
+
+# Benchmarking
+
+## Calibration: the p-value distribution under gene label permutation
+
+To assess calibration of the statistical tests, we repeatedly permute the gene labels in the \emph{S. moellendorfii} root \parencite{Yang2023} and bacterial biofilm \parencite{Dar2021} datasets and then apply the regular \smop, \spicy and NE analyses (NE could not be applied to the biofilm dataset for computational reasons). The resulting p-value distributions are shown in Figures \ref{fig:qqYang}-\ref{fig:qqDar} and suggest \smop to be a well calibrated test. The slight peak of low p-values for the univariate nearest-neighbour distances in \fref{fig:qqDar} is mainly caused by highly expressed genes and is likely a result of the compositional effect as discussed in Supplementary Section \ref{sec:comp}. This effect decreases as the dimensionality of the data decreases. The qq-plots for \spicy and NE reveal strong and moderate departures from uniformity, respectively. 
+
+```{r yangNull}
+if(!file.exists(YangNullFile <- "Results/YangNull.RData")){
+    load("Data/Yang2023.RData")
+    yangNullSims = mclapply(mc.cores = nCores, seq_len(nSims), function(i){
+        cat(i, "\t")
+        if(!file.exists(nullFile <- paste0("Results/simsNullYang/sim", i, ".RData"))){
+            hypCopy = hypYang
+            for(j in rownames(hypCopy)){
+                marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene = sample(marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene)
+                #Scramble gene identifiers
+            }
+            distResYangScrambled = estPis(hypCopy, pis = c("nn", "nnPair"))
+            distResYangScrambled = addWeightFunction(distResYangScrambled, designVars = c("root", "day"))
+            lmmsYangScrambled = fitLMMs(distResYangScrambled, randomVars = "root", fixedVars = "day")
+            pVals = lapply(c("nn" = "nn", "nnPair" = "nnPair"), function(pi) {
+                getResults(lmmsYangScrambled, pi, "Intercept")[, "pVal"]
+                })
+            save(pVals, file = nullFile)
+        } else load(nullFile)
+        pVals
+    })
+    save(yangNullSims, file = YangNullFile)
+} else load(YangNullFile) 
+```
+
+```{r yangNullAlt}
+if(!file.exists(YangNullAltFile <- "Results/YangNullAlt.RData")){ 
+    load("Data/Yang2023.RData")
+    yangNullAltSims = mclapply(mc.cores = nCores, seq_len(nSims), function(i){
+        cat(i, "\t")
+        if(!file.exists(nullFile <- paste0("Results/simsNullYangAlt/sim", i, ".RData"))){
+            hypCopy = hypYang
+            for(j in rownames(hypCopy)){
+                marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene = spiatsYang[[j]]@colData$gene =
+                    sample(marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene)
+                #Scramble gene identifiers
+            }
+            #NE
+            spiatYangResSub = spiatWrapper(spiatsYang, hypCopy, nCores = 1)
+             dfSpiatYang = data.frame("prop" = NA, hypCopy[, c("root", "day")])
+            spiatPvals = sapply(seq_len(nrow(spiatYangRes$loMat)), function(j){
+                    dfSpiatYang$prop = spiatYangRes$loMat[j,]
+                try({fit  = lmerTest::lmer("prop ~ day + (1|root)", data = dfSpiatYang, 
+                                    contrasts = list(day = "contr.sum"), na.action = na.omit)
+                summary(fit)$coef["(Intercept)", "Pr(>|t|)"]})
+            })
+            names(spiatPvals) = rownames(spiatYangRes$loMat)
+            #spicyR
+            df = Reduce(rbind,lapply(seq_len(nrow(hypCopy)), function(x){
+                data.frame(coords(hypCopy[x, "ppp", drop = TRUE]), marks(hypCopy[x, "ppp", drop = TRUE]), hypCopy[x, "day", drop = TRUE], hypCopy[x, "root", drop = TRUE], hypCopy[x, "section", drop = TRUE], hypCopy[x, "drs", drop = TRUE])
+            }))
+            colnames(df)[7:10] = c("day", "root", "section", "imageID")
+            seYang = SpatialExperiment(assays = matrix(0, 1, nrow(df)), colData = df[, c("gene", "day", "root", "imageID", "x", "y")],
+                                       spatialCoordsNames = c("x", "y"))
+            spicyTime = spicy(seYang, condition = "day", imageIDCol = "imageID", verbose = TRUE,
+                              cellTypeCol = "gene", subject = "root", BPPARAM = SerialParam())
+            pValsYangSpicy = sapply(names(spicyTime$weights), function(genePair){
+                dfYang = data.frame("u" = spicyTime$pairwiseAssoc[[genePair]], "weight" = spicyTime$weights[[genePair]], 
+                                    hypYang[, c("root", "day")])
+                if(sum(!is.na(dfYang$u)) < 5){
+                            return(NULL)
+                }
+                dfYang$u[is.na(dfYang$u)] = 0 #Following spicyR
+                modSpicy = try(lmerTest::lmer(u ~ day + (1|root), data = dfYang, weights = weight, contrasts = list("day" = "contr.sum")), 
+                               silent = TRUE)
+                if(is(modSpicy, "try-error")) {
+                    return(matrix(NA, 2, 2, dimnames = list(c("(Intercept)", "day1"), c("Estimate", "Pr(>|t|)")))) 
+            } else summary(modSpicy)$coef["(Intercept)", "Pr(>|t|)"]
+        });names(pValsYangSpicy) = names(spicyTime$weights)
+            save(spiatPvals, pValsYangSpicy, file = nullFile)
+        } else load(nullFile)
+        list("EN" = spiatPvals, "spicyR" = pValsYangSpicy)
+    })
+    save(yangNullAltSims, file = YangNullAltFile)
+} else load(YangNullAltFile) 
+```
+
+```{r darnull}
+if(!file.exists(DarNullFile <- "Results/DarNull.RData")){ 
+    load("Data/dar2021.RData")
+    DarNullSims = mclapply(mc.cores = nCores, seq_len(nSims), function(i){
+        cat(i, "\t")
+        if(!file.exists(nullFile <- paste0("Results/simsNullDar/sim", i, ".RData"))){
+            hypCopy = hypDar
+            for(j in rownames(hypCopy)){
+                marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene = sample(marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene)
+                #Scramble gene identifiers
+            }
+            distResDarScrambled = estPis(hypCopy, pis = c("nn", "nnPair"))
+            distResDarScrambled = addWeightFunction(distResDarScrambled, designVars =c("fov", "time"))
+            lmmsDarScrambled = fitLMMs(distResDarScrambled, randomVars = "fov", fixedVars = "time")
+            pVals = lapply(c("nn" = "nn", "nnPair" = "nnPair"), function(pi) {
+                getResults(lmmsDarScrambled, pi, "Intercept")[, "pVal"]
+            })
+            save(pVals, file = nullFile)
+        } else load(nullFile)
+        pVals
+    })
+    save(DarNullSims, file = DarNullFile)
+} else load(DarNullFile)
+```
+
+```{r darnullalt}
+if(!file.exists(DarNullAltFile <- "Results/DarNullAlt.RData")){
+    load("Data/dar2021.RData"); load("Results/spiatsDar.RData")
+    DarNullAltSims = lapply(seq_len(nSims), function(i){
+        cat(i, "\t")
+        if(!file.exists(nullFile <- paste0("Results/simsNullDarAlt/sim", i, ".RData"))){
+            hypCopy = hypDar[idS <- (sapply(hypDar$ppp, npoints)> 1e2), ]
+            for(j in rownames(hypCopy)){
+                marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene = 
+                    sample(marks(hypCopy[[j, "ppp"]],drop = FALSE)$gene)
+                #Scramble gene identifiers
+            }
+            #NE too computationally intensive
+            #spicyR
+            df = Reduce(rbind,lapply(seq_len(nrow(hypCopy)), function(x){
+                data.frame(coords(hypCopy[x, "ppp", drop = TRUE]), marks(hypCopy[x, "ppp", drop = TRUE]),
+                           hypCopy[x, "fov", drop = TRUE], hypCopy[x, "z", drop = TRUE], hypCopy[x, "time", drop = TRUE],
+                           hypCopy[x, "image", drop = TRUE])
+            }))
+            colnames(df)[5:8] = c("fov", "z", "time", "imageID")
+            seDar = SpatialExperiment(assays = matrix(0, 1, nrow(df)), 
+                                      colData = df[,  c("x", "y", "z","fov", "time", "imageID", "gene")],
+                                       spatialCoordsNames = c("x", "y"), sample_id = "imageID")
+            spicyTime = spicy(seDar, condition = "time", imageIDCol = "imageID", verbose = TRUE,
+                              cellTypeCol = "gene", subject = "fov", BPPARAM = MulticoreParam(nCores))
+            pValsDarSpicy = sapply(names(spicyTime$weights), function(genePair){
+                dfDar = data.frame("u" = spicyTime$pairwiseAssoc[[genePair]], "weight" = spicyTime$weights[[genePair]],
+                                    hypDar[idS, c("fov", "time")])
+                if(sum(!is.na(dfDar$u)) < 5){
+                    return(NULL)
+                }
+                dfDar$u[is.na(dfDar$u)] = 0 #Following spicyR
+                modSpicy = try(lmerTest::lmer(u ~ time + (1|fov), data = dfDar, weights = weight, 
+                                              contrasts = list("time" = "contr.sum")), silent = TRUE)
+                if(is(modSpicy, "try-error")) {
+                    return(matrix(NA, 2, 2, dimnames = list(c("(Intercept)", "time10h"), c("Estimate", "Pr(>|t|)"))))
+                } else summary(modSpicy)$coef["(Intercept)", "Pr(>|t|)"]
+            });names(pValsDarSpicy) = names(spicyTime$weights)
+            save(pValsDarSpicy, file = nullFile)
+        } else load(nullFile)
+        list("spicyR" = pValsDarSpicy)
+    })
+    save(DarNullAltSims, file = DarNullAltFile)
+} else load(DarNullAltFile) 
+```
+
+```{r qqPlotsYang, fig.cap = "\\label{fig:qqYang}qq-plots versus standard uniform quantiles of \\smop, \\spicy and NE p-values after permutation of the \\emph{S. moellendorfii} root data of \\textcite{Yang2023}. The method and test statistic are shown in the title."}
+pvalsUnlist = lapply(nnVec <- c("smoppix:\nUnivariate nearest-neighbour distances" = "nn", "smoppix:\nBivariate nearest-neighbour distances" = "nnPair"), function(x) unlist(lapply(yangNullSims, function(y) y[[x]])))
+spicVec <- c("spicyR: Univariate u-statistic", "spicyR: Bivariate u-statistic")
+pvalsYangSpic =  lapply(yangNullAltSims, function(y) {
+    id = sapply(names(y$spicyR), function(z) strsplit(z, split = "__")[[1]])
+    list("spicyR: Univariate u-statistic" = y$spicyR[id[1,] == id[2,]], "spicyR: Bivariate u-statistic" = y$spicyR[id[1,] != id[2,]])
+})
+encVec <- c("Univariate NE", "Bivariate NE")
+pvalsYangEN =  lapply(yangNullAltSims, function(y) {
+    id = grep("--", names(y$EN))
+    list("Univariate NE" = as.numeric(y$EN[-id]), "Bivariate NE" = as.numeric(y$EN[id]))
+})
+par(mfcol = c(2,3))
+foo = lapply(names(pvalsUnlist), function(x){qplotUnif(pvalsUnlist[[x]], main = x)})
+foo = lapply(spicVec, function(x){qplotUnif(unlist(lapply(pvalsYangSpic, function(y) y[[x]])), main = x)})
+foo = lapply(encVec, function(x){qplotUnif(unlist(lapply(pvalsYangEN, function(y) y[[x]])), main = x)})
+par(mfrow = c(1,1))
+```
+
+```{r qqPlotsDar, fig.cap = "\\label{fig:qqDar}qq-plots versus standard uniform quantiles of \\smop and \\spicy p-values after permutation of the gene labels of the bacterial biofilm data by \\textcite{Dar2021}. The EN method was too computationally intensive to be run on this dataset."}
+pvalsUnlistDar = lapply(nnVec, function(x) unlist(lapply(DarNullSims, function(y) y[[x]])))
+pvalsYangDarSpic =  lapply(DarNullAltSims, function(y) {
+    id = sapply(names(y$spicyR), function(z) strsplit(z, split = "__")[[1]])
+    list("spicyR: Univariate u-statistic" = y$spicyR[id[1,] == id[2,]], "spicyR: Bivariate u-statistic" = y$spicyR[id[1,] != id[2,]])
+})
+par(mfcol = c(2,2)) 
+foo = lapply(names(pvalsUnlistDar), function(x){qplotUnif(pvalsUnlistDar[[x]], main = x)})
+foo = lapply(spicVec, function(x){qplotUnif(unlist(lapply(pvalsYangDarSpic, function(y) y[[x]])),main = x)})
+par(mfrow = c(1,1)) 
+```
+
+\clearpage
+
+## Invariance under subsampling \label{sec:invar}
+
+We investigate the sensitivity to density differences through a series of subsampling experiments for \smop, \spicy and NE. The molecules of the point patterns from the \emph{S. moellendorfii} root \parencite{Yang2023} and mouse fibroblast \parencite{Eng2019} datasets were randomly subsampled to proportions running from 0.9 to 0.4 by decrements of 0.1, and measures of aggregation and colocalization and PIs for distance to edge and centroid were calculated for the subsampled datasets. For the univariate PIs, the 10 most expressed genes were used, for the bivariate PIs the pairs of 11th-20th most expressed genes were paired with the 21st-30th most expressed genes. Choosing non-overlapping sets of genes guarantees independence in the coming regression analysis. The estimated PIs, \spicy's u-statistic and NE log-ratio are plotted as a function of subsampling proportion in Figures \ref{fig:subSamUni}-\ref{fig:subSamBiSpiat} for a subset of genes. To formally test sensitivity to subsampling, we fit linear models with the measure of spatial patterning (either PI, u-statistic or log-ratio) as outcome as a function of subsampling proportion, day and root-gene (pair) combination for the _S. moellendorfii_ dataset, or as a function of subsampling proportion and experiment-fov-gene combination for the mouse fibroblast dataset. The estimated slopes and associated p-values are shown in Table \ref{tab:subsam}. The univariate nearest-neighbour PI is slightly sensitive to density changes, as observed and background nearest-neighbour distributions do not change in the same way under subsampling. In addition, both u-statistics are sensitive to the subsampling proportion. Yet the changes in the statistics with subsampling are rather modest compared to the overall variability of the test statistics in the datasets, quantified through the interquartile ranges (IQRs). All other measures are invariant to subsampling.
+
+```{r subsampling}
+pSeq = seq(0.9, 0.4, by = -0.1); names(pSeq) = pSeq
+numShowSubSam = 10 
+decFeat = names(sort(decreasing = TRUE, table(unlist(lapply(hypYang$ppp, function(x) marks(x, drop = FALSE)$gene)))))
+mostExprFeat = decFeat[seq_len(numShowSubSam)]
+mostExprPairs = apply(pairMat <- cbind("gene1" = pair1 <- decFeat[(numShowSubSam+1):(numShowSubSam+10)], 
+                            "gene2" = pair2 <- decFeat[(numShowSubSam+11):(numShowSubSam+20)]), 1, paste, collapse = "--") #Choose different pairs to avoid dependence issues
+if(!file.exists(subSamFileYang <- "Results/subsamYang.RData")){
+    register(SerialParam())
+    subSamListYang = mclapply(pSeq, mc.cores = nCores - 1, function(pps){
+        subYang = hypYang
+        subYang$ppp = lapply(subYang$ppp, function(x){
+            x[sort(sample(npoints(x), round(pps*npoints(x)))),]
+        })
+        subYang$tabObs = lapply(subYang$ppp, function(x) table(marks(x)$gene))
+        pisEst = estPis(subYang, pis = c("nn", "nnPair"))
+    })
+    save(subSamListYang, file = subSamFileYang)
+} else load(subSamFileYang) 
+```
+
+```{r subSamSpicy}
+if(!file.exists(subSamFileYangSpicy <- "Results/subsamYangSpicy.RData")){
+    subSamListYangSpicy = mclapply(pSeq, mc.cores = nCores, function(pps){
+           df = Reduce(rbind,lapply(seq_len(nrow(hypYang)), function(x){
+                data.frame(coords(hypYang[x, "ppp", drop = TRUE]), marks(hypYang[x, "ppp", drop = TRUE]), hypYang[x, "day", drop = TRUE], hypYang[x, "root", drop = TRUE], hypYang[x, "section", drop = TRUE], hypYang[x, "drs", drop = TRUE])[sample(npoints(hypYang[x, "ppp", drop = TRUE]), round(npoints(hypYang[x, "ppp", drop = TRUE])*pps)),]
+            }))
+            colnames(df)[7:10] = c("day", "root", "section", "imageID")
+            tab = table(df$gene, df$imageID)
+            df = df[df$gene %in% c(mostExprFeat, pair1, pair2),]
+            seYang = SpatialExperiment(assays = matrix(0, 1, nrow(df)), colData = df[, c("gene", "day", "root", "imageID", "x", "y")],
+                                       spatialCoordsNames = c("x", "y"))
+            spicyTime = spicy(seYang, condition = "day", imageIDCol = "imageID", verbose = TRUE,
+                              cellTypeCol = "gene", subject = "root", BPPARAM = bpparam(),
+                              from = c(mostExprFeat, pair1), to = c(mostExprFeat, pair2))
+    })
+    save(subSamListYangSpicy, file = subSamFileYangSpicy)
+} else load(subSamFileYangSpicy) 
+```
+
+```{r subsamspiatyang}
+if(!file.exists(spiatYangSubsamFile <- "Results/subsamYangSpiat.RData")){
+    subSamYangSpiats = lapply(pSeq, function(pps){
+            if(!file.exists(tmpFile <- paste0("Results/subsamYangSpiat/Prop", pps, ".RData"))){
+                for(i in seq_along(spiatsYang)){
+                    spiatsYang[[i]] = spiatsYang[[i]][,id<- sample(ncol(spiatsYang[[i]]), round(ncol(spiatsYang[[i]])*pps))]
+                    hypYang$ppp[[i]] = hypYang$ppp[[i]][id, ]
+                    hypYang$tabObs[[i]] = table(marks(hypYang$ppp[[i]])$gene)
+                }
+                spiatYangResSub = spiatWrapper(spiatsYang, hypYang, nCores = nCores, 
+                                               gridFeat = rbind(cbind("gene1" = mostExprFeat, "gene2" = mostExprFeat), pairMat))
+               save(spiatYangResSub, file = tmpFile)
+            } else load(tmpFile)
+        spiatYangResSub
+        })
+    save(subSamYangSpiats, file = spiatYangSubsamFile)
+} else load(spiatYangSubsamFile)
+numPlotSubSam = 4
+```
+
+```{r subsamPlot, fig.cap = paste0("Estimated univariate nearest-neighbour PIs (y-axis) of ", numPlotSubSam, " most expressed genes (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUni}"), fig.height = 6}
+stripTextSizeSubsam = 6
+pisSub = lapply(subSamListYang, function(x){ 
+    rbind(Reduce(f = rbind, lapply(mostExprFeat, function(i){
+            data.frame("Estimate" = vapply(x$hypFrame$pimRes, FUN.VALUE = double(1), function(y) y$pointDists$nn[i]),
+         hypYang[, c("day", "root", "section")], "gene" = i, PI = "nn")
+    })), 
+    Reduce(f = rbind, lapply(mostExprPairs, function(i){
+            data.frame( "Estimate" = vapply(x$hypFrame$pimRes, FUN.VALUE = double(1),  function(y) y$pointDists$nnPair[i]),
+         hypYang[, c("day", "root", "section")], "gene" = i, PI = "nnPair")
+    })))
+})
+pisSubMolt = melt(pisSub, variable.name = "PI", value.name = "Estimate")
+colnames(pisSubMolt)[7] = "Proportion"
+pisSubMolt$Proportion = as.double(pisSubMolt$Proportion)
+pisSubMoltAgg = aggregate(Estimate ~ PI + Proportion + day + root + gene, pisSubMolt, FUN = mean)
+pisSubMoltAgg$gene = gsub("--", "-", pisSubMoltAgg$gene)
+pisSubMoltAgg$dr = paste0(pisSubMoltAgg$day, pisSubMoltAgg$root)
+ggplot(data = pisSubMoltAgg[pisSubMoltAgg$PI == "nn" & pisSubMoltAgg$gene %in% mostExprFeat[seq_len(numPlotSubSam)],], aes(x = Proportion, y = Estimate, group = dr, col = dr)) + 
+    geom_line() + facet_grid(gene~., scales = "free_y") + theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion") + ylab("Univariate nearest-neighbour PI") 
+```
+
+```{r subsamPlotBI, fig.cap = paste0("Estimated bivariate nearest-neighbour PIs (y-axis) of ", numPlotSubSam, " most expressed gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamBi}"), fig.height = 6}
+ggplot(data = pisSubMoltAgg[pisSubMoltAgg$PI == "nnPair" & pisSubMoltAgg$gene %in% gsub("--", "-", mostExprPairs[seq_len(numPlotSubSam)]),], aes(x = Proportion, y = Estimate, group = dr, col = dr)) + 
+    geom_line() + facet_grid(gene~., scales = "free_y") + theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root")+ xlab("Subsampling proportion") + ylab("Bivariate nearest-neighbour PI") 
+```
+
+```{r subsamplingEng}
+if(!file.exists(subSamFileEng <- "Results/subsamEng.RData")){
+    register(SerialParam())
+    subSamListEng = mclapply(pSeq, mc.cores = nCores - 1, function(pps){
+        subEng = hypEng
+        subEng$ppp = lapply(subEng$ppp, function(x){
+            x[sort(sample(npoints(x), round(pps*npoints(x)))),]
+        })
+        subEng$tabObs = lapply(subEng$ppp, function(x) table(marks(x)$gene))
+        pisEst = estPis(subEng, pis = c("edge", "centroid"))
+    })
+    save(subSamListEng, file = subSamFileEng)
+}
+numShowSubSam = 10
+mostExprFeatEng = names(sort(decreasing = TRUE, table(unlist(lapply(hypEng$ppp, function(x) marks(x, drop = FALSE)$gene))))[seq_len(numShowSubSam)])
+if(!file.exists(pisSubEngFile <- "Results/pisSubEng.RData")){
+    load(subSamFileEng)  
+    pisSubEng = lapply(subSamListEng, function(x){
+        rbind(Reduce(f = rbind, lapply(mostExprFeatEng, function(i){
+                data.frame("Estimate" = vapply(x$hypFrame$pimRes, FUN.VALUE = double(1), function(y) mean(unlist(y$windowDists[[i]]$centroid))),
+            "fov" = x$hypFrame$fov, "experiment" = x$hypFrame$experiment,  "gene" = i, PI = "centroid")
+        })), 
+        Reduce(f = rbind, lapply(mostExprFeatEng, function(i){
+                data.frame( "Estimate" = vapply(x$hypFrame$pimRes, FUN.VALUE = double(1),  function(y) mean(unlist(y$windowDists[[i]]$edge))),
+             "fov" = x$hypFrame$fov, "experiment" = x$hypFrame$experiment, "gene" = i, PI = "edge")
+        })))
+    })
+    save(pisSubEng, file = pisSubEngFile)
+} else load(pisSubEngFile)
+```
+
+```{r subsamPlotEng, fig.cap = "Estimated univariate intracellular PIs (y-axis) for vicinity to centroid or edge (columns) of 10 most expressed genes (rows) as a function of subsampling proportion (x-axis) of the mouse fibroblast data by \\textcite{Eng2019}, averaged over cells within fields of view. Separate lines are drawn per field of view and experiment (colours).\\label{fig:subSamCellEng}", fig.height = 10.5}
+pisSubMoltEng = melt(pisSubEng, variable.name = "PI", value.name = "Estimate")
+colnames(pisSubMoltEng)[6] = "Proportion" 
+pisSubMoltEng$Proportion = as.double(pisSubMoltEng$Proportion)
+pisSubMoltEngCell = aggregate(Estimate ~ PI + Proportion + fov + experiment + gene, pisSubMoltEng, FUN = mean)
+pisSubMoltEngCell$fe = paste(pisSubMoltEngCell$fov, pisSubMoltEngCell$experiment)
+ggplot(data = pisSubMoltEngCell, aes(x = Proportion, y = Estimate, group = fe, col = fe)) + 
+    geom_line() + facet_grid(gene~PI, scales = "free_y") + scale_colour_discrete(name = "FOV and experiment")+ theme(strip.text = element_text(size = stripTextSizeSubsam+2)) + 
+    xlab("Subsampling proportion") + ylab("Probabilistic index")
+```
+
+```{r subsamspicyPlot, fig.cap = paste0("Estimated univariate u-statistic (y-axis) of ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUUni}"), fig.height = 5}
+USub = lapply(subSamListYangSpicy, function(x){
+    rbind(Reduce(f = rbind, lapply(mostExprFeat, function(i){
+            data.frame("Estimate" = x$pairwiseAssoc[[paste0(i, "__", i)]],
+         hypYang[, c("day", "root", "section")], "gene" = i, uStatistic = "univariate")
+    })),  
+    Reduce(f = rbind, lapply(mostExprPairs, function(i){
+            data.frame( "Estimate" = x$pairwiseAssoc[[gsub("--", "__", i)]],
+          hypYang[, c("day", "root", "section")], "gene" = i, uStatistic = "bivariate")
+    })))
+})
+uSubMolt = melt(USub, variable.name = "uStatistic", value.name = "Estimate")
+colnames(uSubMolt)[7] = "Proportion"
+uSubMolt$Proportion = as.double(uSubMolt$Proportion)
+uSubMoltAgg = aggregate(Estimate ~ uStatistic + Proportion + day + root + gene, uSubMolt, FUN = mean) 
+uSubMoltAgg$dr = paste0(uSubMoltAgg$day, uSubMoltAgg$root)
+uSubMoltAgg$what = uSubMoltAgg$uStatistic
+uSubMoltAgg$test = "spicyR"
+ggplot(data = uSubMoltAgg[uSubMoltAgg$uStatistic == "univariate"  & uSubMoltAgg$gene %in% mostExprFeat[seq_len(numPlotSubSam)],], aes(x = Proportion, y = Estimate, group = dr, col = dr)) +
+    geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Univariate U-statistic")
+```
+
+```{r subsamspicyPlotBi, fig.cap = paste0("Estimated bivariate u-statistic (y-axis) of ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUBi}"), fig.height = 5}
+uSubMoltAgg$gene = gsub("--", "-", uSubMoltAgg$gene)
+ggplot(data = uSubMoltAgg[uSubMoltAgg$uStatistic == "bivariate"  & uSubMoltAgg$gene %in% gsub("--", "-", mostExprPairs[seq_len(numPlotSubSam)]),], aes(x = Proportion, y = Estimate, group = dr, col = dr)) +
+    geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Bivariate U-statistic")
+```
+
+```{r subsamPlotSpiat, fig.cap = paste0("Estimated log-ratio of univariate neighbourhood enrichment by NE (y-axis) of ", numPlotSubSam, " most expressed genes (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUniSpiat}"), fig.height = 5}
+lorsSub = lapply(subSamYangSpiats, function(x){  
+    rbind(Reduce(f = rbind, lapply(mostExprFeat, function(i){
+            data.frame("Estimate" = x$loMat[i,],
+         hypYang[, c("day", "root", "section")], "gene" = i, Enrichment = "univariate")
+    })), 
+    Reduce(f = rbind, lapply(mostExprPairs, function(i){
+            data.frame( "Estimate" = getGp(x$loMat,i),
+          hypYang[, c("day", "root", "section")], "gene" = i, Enrichment = "bivariate")
+    })))
+})
+lorsSubMolt = melt(lorsSub, variable.name = "LOR", value.name = "Estimate")
+colnames(lorsSubMolt)[8] = "Proportion"
+lorsSubMolt$Proportion = as.double(lorsSubMolt$Proportion)
+lorsSubMoltAgg = aggregate(Estimate ~ Enrichment + Proportion + day + root + gene, lorsSubMolt, FUN = mean, na.rm = TRUE)
+lorsSubMoltAgg$dr = paste0(lorsSubMoltAgg$day, lorsSubMoltAgg$root)
+ggplot(data = lorsSubMoltAgg[lorsSubMoltAgg$Enrichment == "univariate" & lorsSubMoltAgg$gene %in% mostExprFeat[seq_len(numPlotSubSam)],], aes(x = Proportion, y = Estimate, group = dr, col = dr)) + geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Univariate log-ratio")
+```
+
+```{r subsamPlotBIspiat, fig.cap = paste0("Estimated log-ratio of bivariate neighbourhood enrichment by NE (y-axis) of ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamBiSpiat}"), fig.height = 5}
+lorsSubMoltAgg$gene = gsub("--", "-", lorsSubMoltAgg$gene)  
+ggplot(data = lorsSubMoltAgg[lorsSubMoltAgg$Enrichment == "bivariate" & lorsSubMoltAgg$gene %in% gsub("--", "-", mostExprPairs[seq_len(numPlotSubSam)]),], aes(x = Proportion, y = Estimate, group = dr, col = dr)) + geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) +  scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion") + ylab("Bivariate log-ratio")
+```
+
+```{r linearMods}
+##Yang
+###Smoppix
+tmpYang = lapply(distResYang$hypFrame$pimRes, function(x){
+    nn = unlist(x$pointDists$nn)
+    nnPair = unlist(x$pointDists$nnPair)
+    list("nn" = nn, "nnPair" = nnPair)
+})
+nnAll = iqr(unlist(lapply(tmpYang, function(x) x$nn)))
+nnPairAll = iqr(unlist(lapply(tmpYang, function(x) x$nnPair)))
+### spicy
+spicyNamesBi = gsub("--", "__", rownames(resYang$Intercept.nnPair))
+spicyNamesUni = setdiff(names(spicyTime$weights), spicyNamesBi)
+uSpicyUni = lapply(spicyNamesUni, function(genePair){
+        spicyTime$pairwiseAssoc[[genePair]]
+})
+uSpicyBi = lapply(spicyNamesBi, function(genePair){
+        spicyTime$pairwiseAssoc[[genePair]]
+})
+spicUni = iqr(unlist(uSpicyUni), na.rm = TRUE);spicBi = iqr(unlist(uSpicyBi), na.rm = TRUE)
+###Spiat
+id <- grep("--", rownames(spiatYangRes$loMat))
+ENuni = iqr(spiatYangRes$loMat[-id,], na.rm = TRUE)
+ENbi = iqr(spiatYangRes$loMat[id], na.rm = TRUE)
+##Eng
+load("Results/EngFileOv.RData")
+tmpEng = lapply(EngListOv$hypFrame$pimRes, function(x){
+    edge = unlist(lapply(x$windowDists, function(y){
+      y$edge
+    }))
+    centroid = unlist(lapply(x$windowDists, function(y){
+      y$centroid  
+    }))
+    list("edge" = edge, "centroid" = centroid)
+})
+rm(EngListOv)
+edgeAll = iqr(unlist(lapply(tmpEng, function(x) x$edge)))
+centroidAll = iqr(unlist(lapply(tmpEng, function(x) x$centroid)))
+pValPI = summary(lm(data = pisSubMolt, Estimate ~ Proportion +day + root:gene))$coef["Proportion",c("Estimate", "Pr(>|t|)")]
+pValPIuni = summary(lm(data = pisSubMolt[pisSubMolt$PI == "nn", ], Estimate ~ Proportion +day + root:gene))$coef["Proportion",c("Estimate", "Pr(>|t|)")]
+pValPIbi = summary(lm(data = pisSubMolt[pisSubMolt$PI == "nnPair", ], Estimate ~ Proportion +day + root:gene))$coef["Proportion",c("Estimate", "Pr(>|t|)")]
+pValSpiat = summary(fit <- lm(data = lorsSubMolt, Estimate ~ Proportion +day + root:gene))$coef["Proportion",c("Estimate", "Pr(>|t|)")]
+pValSpiatUni = summary(lm(data = lorsSubMolt[lorsSubMolt$Enrichment == "univariate",], Estimate ~ Proportion +day + root:gene+ section))$coef["Proportion",c("Estimate", "Pr(>|t|)")]
+pValSpiatBi = summary(lm(data = lorsSubMolt[lorsSubMolt$Enrichment == "bivariate",], Estimate ~ Proportion +day + root:gene+ section))$coef["Proportion",c("Estimate", "Pr(>|t|)")]
+estsSpicy = summary(lm(data = uSubMolt, Estimate ~ Proportion +day + root:gene))$coef["Proportion",c("Estimate", "Pr(>|t|)")] 
+estsSpicyUni = summary(lm(data = uSubMolt[uSubMolt$uStatistic == "univariate",], Estimate ~ Proportion +day + root:gene))$coef["Proportion",c("Estimate", "Pr(>|t|)")] 
+estsSpicyBi = summary(lm(data = uSubMolt[uSubMolt$uStatistic == "bivariate",], Estimate ~ Proportion +day + root:gene))$coef["Proportion",c("Estimate", "Pr(>|t|)")] 
+estPIcentroid =  summary(lm(data = pisSubMoltEng[pisSubMoltEng$PI == "centroid",], Estimate ~ Proportion + fov:gene:experiment))$coef["Proportion",c("Estimate", "Pr(>|t|)")] 
+estPIboundary =  summary(lm(data = pisSubMoltEng[pisSubMoltEng$PI == "edge",], Estimate ~ Proportion + fov:gene:experiment))$coef["Proportion",c("Estimate", "Pr(>|t|)")] 
+```
+
+```{r yabSubsam, results = "asis"}
+subMat = rbind("Univariate PI" = c(pValPIuni, nnAll), "Bivariate PI" = c(pValPIbi, nnPairAll), 
+               "Centroid PI" = c(estPIcentroid, centroidAll), "Edge PI" = c(estPIboundary, edgeAll),
+               "Univariate NE" = c(pValSpiatUni, ENuni), "Bivariate NE" = c(pValSpiatBi, ENbi),
+               "Univariate u-statistic" = c(estsSpicyUni, spicUni), "Bivariate u-statistic" = c(estsSpicyBi, spicBi))
+subMat[, 1] = signif(subMat[, 1]/10, 3) #10% interpretation
+colnames(subMat) = c("Slope", "P-value", "IQR")
+print.xtable(comment = FALSE, xtable(subMat, align = "|r|lr|r|", display = c("s", "f", "e", "f"), digits = cbind(rep(1, nrow(subMat)), c(5,5,5,5,4,4,1,1),rep(1, nrow(subMat)),rep(2, nrow(subMat))), caption = "Estimated slopes of association measure as a function of subsampling proportion and associated p-values. The slope is the expected change in the spatial measure associated with a 10\\% increase in subsampling proportion. IQR is the interquartile range of the spatial measure of the entire real datasets. NE: neighbourhood enrichment\\label{tab:subsam}"), hline.after = c(-1,0, 4, 6, nrow(subMat)))
+write.csv(subMat, file = "Results/subMat.csv")
+```
+
+\clearpage
+
+## Time and memory benchmark \label{sec:timing}
+
+Timings and RAM usage on an Intel Core i5-11400H 2.70GHz processor were investigated for \smop, \emph{spicyR} and NE for increasing number of molecules and genes on synthetic point patterns. The point patterns were generated under CSR on a square area of 10 $\times$ 10, the neighbourhood size for NE was set at 1. The number of molecules was varied between 500, 1,000, 2,000 and 3,000 and the number of features between 10, 60 and 100. Per parameter setting, 10 datasets were generated and runtimes and peak RAM usage were averaged over these repeats. Tests for univariate as well as bivariate patterns were run. No multithreading was used for any method. NE calculation with _SPIAT_ crashed when applied to 100 features, so it was only run for fewer features. Results are shown in \fref{fig:timings}. NE becomes very slow as th number of features increases, despite calculating the enrichment using SPIAT's _average_percentage_of_cells_within_radius_ function, which calls the _frNN_ function from the _dbscan_ package that relies on a custom C-function. 
+
+```{r timing}
+numRepeatsTime = 10
+numGenes = c(10, 60, 100)
+numPoints = c(5e2, 1e3, 2e3, 3e3)
+GridTime = expand.grid("numGenes" = numGenes, "numPoints" = numPoints, 
+                       "rep" = seq_len(numRepeatsTime))
+numPPPs = 12;Range = 1
+if(!file.exists(timingsFile <- "Results/timings.RData")){
+    register(SerialParam())#Serial processing for timings
+    timings = lapply(seq_len(nrow(GridTime)), function(j){
+        cat(j, "\t")
+        if(!file.exists(timFile <- paste0("Results/timings/", paste(GridTime[j,], collapse = "_"), ".RData"))){
+            numPoints = GridTime[j, "numPoints"];numGenes = GridTime[j, "numGenes"]
+            List = lapply(seq_len(numPPPs), function(i){
+                ppp = runifpoint(numPoints, win = owin(xrange = c(0, 10), yrange = c(0, 10)))
+                genes = sample(paste0("gene", seq_len(numGenes)), numPoints, replace = TRUE)
+                data.frame(coords(ppp), "gene" = genes, "image" = i, "pheno_condition" = i%%2, 
+                           "pheno_fov" = sample(paste0("fov", 1:3), numPoints, replace = TRUE))
+            })
+            names(List) = seq_len(numPPPs)
+            #Build hyperframe
+            hypFrame = buildHyperFrame(List)
+            hypFrame$condition = factor(seq_len(numPPPs) %% 2)
+            hypFrame$fov = factor(seq_len(numPPPs) %% 3)
+            #Build segmented cells
+            dfSpicy = Reduce(rbind,List)
+            spicyRAM = peakRAM(spicyRes <- spicy(dfSpicy, condition = "pheno_condition", imageIDCol = "image", 
+                                                 cellTypeCol = "gene", verbose = FALSE, subject = "pheno_fov", 
+                                                 weights = FALSE))
+            #Switch off spicyR weights to avoid errors
+            smoppixTime = peakRAM({
+                smoppixRes <- estPis(hypFrame, pis = c("nn", "nnPair"), verbose = FALSE)
+                smoppixRes <- addWeightFunction(smoppixRes, designVars = "condition")
+                smoppixModels <- fitLMMs(smoppixRes, fixedVars = "condition", randomVars = "fov", verbose = FALSE)
+                })
+           smoppixTimeFixed = peakRAM({
+                smoppixRes <- estPis(hypFrame, pis = c("nn", "nnPair"), verbose = FALSE)
+                smoppixRes <- addWeightFunction(smoppixRes, designVars = "condition")
+                smoppixModels <- fitLMMs(smoppixRes, fixedVars = c("condition", "fov"), verbose = FALSE)
+                })
+           #SPIAT
+         gridSpiat = expand.grid("gene1" = paste0("gene", seq_len(numGenes)), 
+                                    "gene2" = paste0("gene", seq_len(numGenes)), stringsAsFactors = FALSE)
+         spiatList = lapply(List, function(df){
+                makeSpiatCellTypes(df, "gene", sample_id = "image", varNames = c("pheno_condition", "pheno_fov"))
+          })
+         spiatTime = if(numGenes==100){
+             rep(NA, 4)
+             } else {peakRAM({
+             estProps = vapply(spiatList, FUN.VALUE = double(nrow(gridSpiat)), function(y){
+                 vapply(seq_len(nrow(gridSpiat)), FUN.VALUE = double(1), function(i){
+                         average_percentage_of_cells_within_radius(spe_object = y,
+                        reference_celltype = gridSpiat[i, "gene1"], target_celltype = gridSpiat[i, "gene2"], 
+                        radius = Range, feature_colname = "gene")
+                 })
+             })
+            # Reference: overall proportions
+            emptyProp = double(length(getFeatures(hypFrame)));names(emptyProp) = getFeatures(hypFrame)
+            refProp = vapply(hypFrame$tabObs, FUN.VALUE = emptyProp, function(x){
+                emptyProp[names(x)] = x;emptyProp/sum(emptyProp)
+            })
+            #Logratio
+            loMat = log(estProps/refProp[gridSpiat[, "gene2"], ])
+            loMat[is.infinite(loMat)] = NA;rownames(loMat) = paste0("gene",seq_len(nrow(loMat)))
+             df = data.frame(t(loMat), hypFrame[, c("condition", "fov")])
+             lapply( rownames(loMat), function(x){
+                 mod <- try(lmerTest::lmer(paste0(x, "~ condition + (1|fov)"),
+                    data = df, na.action = na.omit), silent = TRUE)
+             })
+         })}
+         mat = rbind("spicy" = spicyRAM[2:4], "smoppix" = smoppixTime[2:4], 
+                        "smoppix_fixed" = smoppixTimeFixed[2:4], "SPIAT" = spiatTime[2:4])
+            save(mat, file = timFile)
+        } else load(timFile)
+        return(mat)
+    })
+    save(timings, file = timingsFile)
+} else load(timingsFile) 
+```
+
+```{r boxplotTim, fig.cap = "Average timings in minutes and peak RAM usage in megabytes (MB) over 10 repeats for different methods for testing for aggregation and colocalization. smoppix_fixed indicates that fixed effets models rather than mixed effects models were used, to illustrate the major computational share of fitting the linear mixed models after the PIs have been estimated.\\label{fig:timings}", fig.width = 6, fig.height = 5}
+timingsMat = cbind(Reduce(timings, f = rbind), GridTime[rep(seq_len(nrow(GridTime)), each = 4),], "Method" = rep(c("spicyR", "smoppix", "smoppix_fixed", "NE"), length.out = nrow(GridTime)*4))
+timingsMat$Elapsed_Time_min = timingsMat$Elapsed_Time_sec/60 
+moltTimingsMat = melt(timingsMat, id.vars = c("Method", colnames(GridTime)), variable.name = "quantity")
+moltTimingsMat$quantity  = factor(moltTimingsMat$quantity, levels = c("Elapsed_Time_sec", "Elapsed_Time_min", "Log10_Elapsed_Time_min", "Total_RAM_Used_MiB", "Peak_RAM_Used_MiB"), labels = c("Elapsed time (seconds)", "Elapsed time (minutes)", "Log10 elapsed time (minutes)", "Total RAM usage (MB)", "Peak RAM usage (MB)"))
+moltTimingsMat$Method = factor(moltTimingsMat$Method, levels = c("smoppix", "smoppix_fixed", "spicyR", "NE"), ordered = TRUE)
+ggplot(data = moltTimingsMat[moltTimingsMat$quantity %in% c("Elapsed time (minutes)", "Peak RAM usage (MB)"),], aes(x = numPoints, y = value, colour = Method, linetype = factor(numGenes))) +
+    geom_line(stat = "summary", fun = "mean", fun.args = list("na.rm" = TRUE)) + facet_grid(quantity~., scales = "free_y") + #scale_y_log10() +
+    ylab("") + xlab("Number of molecules") + scale_linetype_discrete(name = "Number of features")
+```
+
+\clearpage
+
+# Details of the \textit{smoppix} method
+
+## The negative hypergeometric distribution \label{sec:nhypSup}
+
+```{r pnhyperIllustr, include = FALSE}
+n = 1e4
+a = 1e2
+dists = abs(rnorm(n))
+idA = sample(n, a)
+obsDist = dists[idA]
+nSims = 1e5
+mcTime = system.time(tabSim2 <- {
+    simDist = vapply(integer(nSims), FUN.VALUE = 0, function(i){
+        min(dists[sample(n, a)])
+    })
+    tabSim = table(simDist)
+    tabSim/sum(tabSim)
+})
+anaTime = system.time({
+    anaDist <- dnhyper(seq_len(n), r = 1, m = a, n = n-a)
+    sd <- sort(dists)
+})
+```
+
+The probabilistic index is defined as the evaluation of the distribution function under the null in the observed distances. In the main paper, we argued that the PI of the nearest-neighbour distances under the background null can be found exactly using the negative hypergeometric distribution. According to this distribution, the number of Bernoulli trials $x$ needed to reach $q$ successes when sampling without replacement from a set of $w = N-1$ units with $k = N_g-1$ has probability mass function \parencite{Miller2007}:
+
+\begin{equation}
+Pr(X=x) = \frac{\binom{x+q-1}{x}\binom{w-q-x}{k-x}}{\binom{w}{k}},
+\label{eq:hyperGeom}
+\end{equation}
+and distribution function $H(x) = Pr(X\leq x) = \sum_{k=0}^x Pr(X=k)$. Setting $q=1$, \eqref{eq:hyperGeom} assigns a probability to each distance $d_{(x)}$ of being the smallest among the set of $N_g-1$ included distances under the background null. In view of the definition of the PI in \eqref{eq:pi}, and the occurrence of ties, we define the following functions based on the set of all distances to a given molecule: 
+
+\begin{equation}
+\begin{aligned}
+F_{all}(D) &= (N-1)^{-1}\sum_{i=1}^{N-1} I(D \leq d_{(i)})\\
+R_{all}(D) &= (N-1)^{-1}\sum_{i=1}^{N-1} I(D < d_{(i)}).
+\end{aligned}
+\label{eq:funsNH}
+\end{equation}
+
+Define $t_i = (N-1) F_{all}(d_{(i)})$ and $r_i = (N-1) R_{all}(d_{(i)})$. The PI can then be estimated as
+
+\begin{equation}
+\begin{aligned}
+\widehat{PI}_g &= \frac{\sum_{i=1}^{N_g-1} \left[H(r_i) + \frac{\left(H(t_i) - H(r_i)\right)}{2}\right]}{(N_g-1)} \\&=\frac{\sum_{i=1}^{N_g-1} \left[H(r_i)+H(t_i)\right]}{2(N_g-1)},
+\end{aligned}
+\label{eq:piNhyp}
+\end{equation}
+without having to do permutations. The functions in \eqref{eq:funsNH} can be computation and memory intensive to obtain when the number of molecules is large, as $(N-1)$ distances need to be calculated per molecule $i$. In that case, approximations of $\tilde{F}_{all}$ and $\tilde{R}_{all}$ based on a random subset of $S$ out of $N-1$ distances are also sufficient. The approximate ranks $\tilde{r}_i = \round{S\tilde{R}_{all}(d_i)}$ and $\tilde{t}_i = \round{S\tilde{F}_{all}(d_i)}$, with $\round{.}$ meaning rounding to the nearest integer, are then plugged into \eqref{eq:piNhyp}. In the spirit of \textcite{Phipson2010}, who propose a correction to prevent permutation p-values from becoming exactly zero, all $\tilde{t}_i$'s equal to 0 are set to 1. $\tilde{t}_i=0$ can occur when the observed nearest-neighbour distance is excluded from $S$. Also when the null distribution and corresponding functions $R_{all}$ and $F_{all}$ are obtained from Monte-Carlo simulation under CSR, these approximate ranks can be used. 
+
+We confirm the exact enumeration of the PI null distribution using the negative hypergeometric distribution empirically using Monte-Carlo simulation. For a randomly drawn subset of size $`r a`$ out of a set of $`r n`$ distances, the distribution of the nearest-neighbour distance (i.e the smallest observation of the subset) is found through permutation, so taking 10,000 other samples of size $`r a`$ and finding their minimum. This is compared to our analytical solution using the negative hypergeometric distribution, as implemented in \smop. The resulting densities are similar (see \fref{fig:negHyp}), with the exact negative hypergeometric distribution being faster.
+
+```{r negHypPdf, fig.cap = "Densities of the nearest-neighbour distance approximated through 100,000 Monte-Carlo simulations (black) and using the analytical approach based on the negative hypergreometric distribution (blue). The computation times in seconds are shown in the legend.\\label{fig:negHyp}", fig.height = 4.5, fig.width = 5}
+plot(as.numeric(names(tabSim2)), c(tabSim2), type = "l", xlab = "Nearest-neighbour distance", ylab = "Density")
+lines(sd, anaDist, col = "blue")
+legend("topright", col = c("black", "blue"), lty = 1, 
+       legend = paste0(c("Monte-Carlo approximation", "Negative hypergeometric distribution"), " (", signif(c(mcTime[3], anaTime[3]),2), "s)"))
+```
+
+\clearpage
+
+## Gradients \label{sec:gradients}
+
+The tests in \smop discussed in the main text are nonparametric, as they do not propose a parametric alternative hypothesis for CSR or the background distribution, but only detect some departure from it through distances. Yet the \smop package also contains a parametric test to detect gradients. The random mechanism spawning point patterns is known as a \textit{point process}, the ones adhering to complete spatial randomness (CSR) are known as a homogeneous Poisson processes. They represent a special case of a wider class of Poisson point processes, whose likelihood function for a set of molecules with $N \times 2$ coordinate matrix $\mb C$ with elements $\mb{c}_i = (x_i, y_i)$ and $i = 1, \hdots N$ is given by \parencite{Walter2023}
+
+\begin{equation}
+L(\mb C|\lambda) = \exp\left(-\int \lambda(\mb C)d\mb C\right)\prod_{i=1}^N\lambda(\mb c_i),
+\label{eq:likpp}
+\end{equation}
+with $\lambda(\mb c_i)$ an intensity parameter. For a homogeneous Poisson process, the intensity is constant over space: $\lambda(\mb c_i) = \lambda$. If an region A can be delineated, a parametric approach to detecting departures from CSR is to replace the constant intensity $\lambda$ in \eqref{eq:likpp} by an intensity varying over space. We focus here on gradients as they are known to occur in tissues and cells \parencite{Ashe2006}. Allowing for differences in slope and direction of the gradient across point patterns, the intensity of such inhomogeneous Poisson process is modeled as:
+
+\begin{equation}
+\log\left(\lambda(\mb c_i)\right) = \gamma + \sum_{t=1}^n\left[\alpha_t x_i + \beta_t y_i\right]I(\mb c_i \in A_t).
+\label{eq:inhomOverA}
+\end{equation}
+The slopes $\alpha_t$ and $\beta_t$ are thus allowed to vary across point patterns, e.g. across cells. Fitting such models on multiple point patterns is implemented in the \textit{mppm} function in the \textit{spatstat} package \parencite{Baddeley2015}. The omnibus null hypothesis of CSR being valid in all point patterns is $H_0: \alpha_1=\alpha_2 = \hdots = \alpha_n = \beta_1 = \beta_2= \hdots = \beta_n = 0$ and can be tested using \smop with a likelihood-ratio test.
+
+## A note on compositionality \label{sec:comp}
+
+Methods testing for colocalization with respect to the background distribution, such as \smop and other methods that use feature label permutation, but also neighbourhood enrichment methods, are sensitive to compositional effects. When one feature is tightly clustered, it becomes more remote from a second feature. Yet as a result, all other features come nearer to this second feature compared to the background null distribution; this is the compositionality. This compositional effect is strongest in low-dimensional settings but fades as the number of features increases because then the influence of a single feature on the background distribution wanes \parencite{Hawinkel2020c}, which is why we observed it in the cell type localization dataset but less in the spatial transcriptomics data. Hence when the number of features is low, we recommend to always test for univariate localization patterns first, and interpret the bivariate patterns in their light. Methods testing for localization patterns departing from CSR are insensitive to compositional effects.
+
+# Software versions
+
+```{r sessioInfo}
+sessionInfo()
+```
+
+<!-- Illustrative graphs on point processes and interevent distances -->
+
+```{r illustrationGraph, include = FALSE}
+load("Data/pObjEng.RData")
+Win = hypEng$owins[[1]][[2]]
+WinBi = hypEng$owins[[3]][[2]]
+widthPaper = 6.6
+rm(hypEng) 
+pdf("Graphs/CSR.pdf", height = 3.6, width = widthPaper)
+A = area(Win)
+numEvents = 2e2; lambda = numEvents/A
+Pch = 16; Cex = 0.5
+par(mfrow = c(2,3), mar = c(0.7, 0.25, 2, 0.25))
+# CSR
+plot(Win, main = "Complete spatial\nrandomness (CSR)")
+set.seed(20250104)
+csr = rpoispp(lambda, win =Win)
+points(csr, pch = Pch, cex = Cex)
+# Aggregation
+aggPat = rMatClust(lambda, mu = 5, scale = 10, win = Win)
+plot(Win, main = "Aggregation")
+points(aggPat[seq_len(numEvents)], pch = Pch, cex = Cex)
+# Regularity
+regPat = rSSI(r = 13, n = numEvents, win = Win)
+plot(Win, main = "Regularity")
+points(regPat[seq_len(min(npoints(regPat), numEvents))], pch = Pch, cex = Cex)
+#Gradient
+plot(Win, main = "Gradient")
+grad = rpoispp(lambda = function(x, y) {exp(((x-Win$xrange[1])*1e-2 + 1e-2*(y-Win$yrange[1])))/1e5}, win = Win)
+points(grad[seq_len(numEvents)], pch = Pch, cex = Cex)
+# Close to centroid
+centroid = centroid.owin(Win, as.ppp = TRUE)
+plot(Win, main = "Close to centroid")
+centr = rpoispp(lambda = lambda*10, win = Win)
+distCentr = crossdist(centr, centroid)
+probDel = ecdf(distCentr)(distCentr)
+probDelConv = probDel^0.05
+probDelConv = probDelConv/max(probDelConv)
+delInd = 1- rbinom(size = 1, prob = probDelConv, n = length(probDel))
+points(centr[as.logical(delInd)], pch = Pch, cex = Cex)
+# Close to cell wall
+plot(Win, main = "Close to cell edge")
+distCell = nncross(X = centr, Y = edges(Win), what = "dist")
+probDel = ecdf(distCell)(distCell)
+probDelConv = probDel^0.25
+probDelConv = probDelConv/max(probDelConv)
+delIndClose = 1-rbinom(size = 1, prob = probDelConv, n = length(probDel))
+points(centr[as.logical(delIndClose)], pch = Pch, cex = Cex)
+par(mfrow = c(1,1))
+dev.off()
+```
+
+```{r crDensbiPI, include = FALSE}
+#Bivariate 
+pdf("Graphs/CSRbi.pdf", height = 1.8, width = widthPaper)
+A = area(WinBi)
+numEvents = 1e2; lambda = numEvents/A
+par(mfrow = c(1,3), mar = c(0.7, .25, 2, 0.25))
+plot(WinBi, main = "Independence", type = "n")
+csr1 = rpoispp(lambda, win = WinBi)
+points(csr1, pch = Pch, cex = Cex, col = "red")
+csr2 = rpoispp(lambda, win = WinBi)
+points(csr2, pch = Pch, cex = Cex, col = "blue")
+plot(WinBi, main = "Colocalization", type = "n")
+Fac = 10e-3;denom = 3e5
+grad0 = rpoispp(lambda = function(x, y) {exp(((x-WinBi$xrange[1])*Fac + Fac*(y-WinBi$yrange[1])))/denom}, win = WinBi)
+points(grad0, pch = Pch, cex = Cex, col = "red")
+grad2 = rpoispp(lambda = function(x, y) {exp(((x-WinBi$xrange[1])*Fac + Fac*(y-WinBi$yrange[1])))/denom}, win = WinBi)
+points(grad2, pch = Pch, cex = Cex, col = "blue")
+plot(WinBi, main = "Antilocalization", type = "n")
+points(grad0, pch = Pch, cex = Cex, col = "red")
+grad3 = rpoispp(lambda = function(x, y) {exp(((-x+WinBi$xrange[2])*Fac + Fac*(-y+WinBi$yrange[2])))/denom}, win = WinBi)
+points(grad3, pch = Pch, cex = Cex, col = "blue")
+dev.off()
+```
+
+```{r csrPaper, include = FALSE}
+pdf("GraphsPaper/CSRpaper.pdf", height = 3.8, width = widthPaper)
+par(mfrow = c(2,4), mar = c(0.7, 0.25, 2, 0.25))
+# CSR
+plot(Win, main = "Complete spatial\nrandomness (CSR)")
+points(csr, pch = Pch, cex = Cex)
+# Aggregation
+plot(Win, main = "Aggregation")
+points(aggPat[seq_len(numEvents)], pch = Pch, cex = Cex)
+# Regularity
+plot(Win, main = "Regularity")
+points(regPat[seq_len(min(npoints(regPat), numEvents))], pch = Pch, cex = Cex)
+# Close to centroid
+centroid = centroid.owin(Win, as.ppp = TRUE)
+plot(Win, main = "Vicinity and remoteness\nw.r.t. cell boundary")
+points(centr[as.logical(delInd)], pch = Pch, cex = Cex)
+# Close to cell wall
+points(centr[as.logical(delIndClose)], pch = Pch, cex = Cex, col = "red")
+#Gradient
+plot(Win, main = "Gradient")
+points(grad[seq_len(numEvents)], pch = Pch, cex = Cex)
+plot(WinBi, main = "Bivariate\nindependence", type = "n")
+points(csr1, pch = Pch, cex = Cex, col = "red")
+points(csr2, pch = Pch, cex = Cex, col = "blue")
+plot(WinBi, main = "Colocalization", type = "n")
+Fac = 10e-3;denom = 3e5
+points(grad0, pch = Pch, cex = Cex, col = "red")
+points(grad2, pch = Pch, cex = Cex, col = "blue")
+plot(WinBi, main = "Antilocalization", type = "n")
+points(grad0, pch = Pch, cex = Cex, col = "red")
+points(grad3, pch = Pch, cex = Cex, col = "blue")
+par(mfrow = c(1,1))
+dev.off()
+```
+
+```{r crDensPI, include = FALSE}
+envG = envelope(csr, correction = "best", fun = "Gest", nsim = 2e2, verbose = FALSE)
+GestAgg = Gest(aggPat)
+GestReg = Gest(regPat)
+maxG = 27;CexLeg = .525 
+pdf("GraphsPaper/densPIGest.pdf", height = 2.8, width = widthPaper - 0.2)
+par(mfrow = c(1,2), mar = Mar <- c(4,3,1,0.3), cex.lab = .7, cex.axis = 0.6, mgp = c(2, 0.5, 0))
+plot(envG, xlim = c(0, maxG), legend = FALSE, lty = c("dashed", "dashed", "solid", "solid"), main = "G-function", axes = TRUE, cex.main = .9)
+lines(GestAgg$r[GestAgg$r<maxG], GestAgg$rs[GestAgg$r<maxG], lty = "dotted")
+lines(GestReg$r[GestReg$r<maxG], GestReg$rs[GestReg$r<maxG], lty = "solid")
+legend("bottomright", lty = c("dashed", "solid", "dashed", "dotted", "solid"), col = c("red", "grey", rep("black", 3)), 
+       legend = c("CSR (theoretical)", "Simulation\nenvelope", "CSR (observed)", "Aggregated", "Regular"), 
+       lwd = c(1, 7, 1,1,1),  cex = CexLeg)
+par(mar = Mar)
+nnCsr = nndist(csr);nnAgg = nndist(aggPat); nnReg = nndist(regPat)
+densCsr = density(nnCsr);densAgg = density(nnAgg); densReg = density(nnReg)
+xLims = range(c(nnCsr, nnAgg, nnReg)); yLims = range(c(densCsr$y, densAgg$y, densReg$y))
+ecdfCSr = ecdf(nnCsr)
+PIagg = mean(ecdfCSr(nnAgg));PIreg = mean(ecdfCSr(nnReg))
+plot(densAgg, main = "Probabilistic index", xlim = xLims, ylim = yLims, xlab = "Nearest-neighbour distance", ylab = "Density", lty = "dotted", cex.main = .9)
+lines(densCsr, main = "", xlim = xLims, lty ="dashed")
+lines(densReg)
+lines(densCsr, main = "", xlim = xLims, lty ="dashed")
+legend("topright", lty = c("dashed", "dotted", "solid"), 
+       legend = c("CSR", paste("Aggregated: PI =", signif(PIagg, 2)), paste("Regular: PI =", signif(PIreg, 2))), 
+      cex = CexLeg+.05)
+par(mfrow = c(1,1))
+dev.off()
+```
+
+```{r kfun, include = FALSE}
+if(!file.exists(envFile <- "Results/envelope.RData")){
+    env = envelope(csr, correction = "best", fun = "Kest", nsim = 1e2)
+    save(env, file = envFile)
+} else load(envFile)
+KestAgg = Kest(aggPat, correction = "best")
+KestReg = Kest(regPat, correction = "best")
+pdf("Graphs/Kest.pdf", width = 7, height = 5.5)
+par(mar = c(4,5,2.5,2))
+maxK = 50 
+plot(env, main = "", xlim = c(0, maxK), legend = FALSE, lty = c("dashed", "dashed", "solid", "solid"), cex.lab = 1.3)
+lines(KestAgg$r[KestAgg$r<maxK], KestAgg$iso[KestAgg$r<maxK], lty = "dotted")
+lines(KestReg$r[KestReg$r<maxK], KestReg$iso[KestReg$r<maxK], lty = "solid")
+legend("topleft", lty = c("dashed", "solid", "dashed", "dotted", "solid"), col = c("red", "grey", rep("black", 3)), 
+       legend = c("CSR (theoretical)", "Simulation envelope\nunder CSR", "CSR (observed)", "Aggregated", "Regular"), 
+       lwd = c(1, 10, 1,1,1), title = "K-function", cex = 1.25)
+dev.off()
+pdf("Graphs/Kest.pdf", width = 7, height = 5.5)
+par(mar = c(4,5,2.5,2))
+plot(env, main = "", xlim = c(0, maxK), legend = FALSE, lty = c("dashed", "dashed", "solid", "solid"), cex.lab = 1.3, lwd = c(NA,1,1,1), col = c("grey", "red", "grey", "grey"))
+lines(KestReg$r[KestReg$r<maxK], KestReg$iso[KestReg$r<maxK], lty = "solid")
+legend("topleft", lty = c("dashed", "solid", "solid"), col = c("red", "grey", rep("black", 1)), 
+       legend = c("CSR (theoretical)", "Simulation envelope\nunder CSR", "Observed"), 
+       lwd = c(1, 10, 1,1,1), title = "K-function", cex = 1.25)
+dev.off()
+```
+
+```{r crDens, include = FALSE}
+pdf("Graphs/CSRdens.pdf", height = 3, width = 6.5)
+par(mfrow = c(2,3), mar = c(0.7, 0.5, 2, 0.5))
+# CSR
+plot(Win, main = "Complete spatial\nrandomness (CSR)")
+points(csr, pch = Pch, cex = Cex)
+# Aggregation
+plot(Win, main = "Aggregation")
+points(aggPat[seq_len(numEvents)], pch = Pch, cex = Cex)
+# Regularity
+plot(Win, main = "Regularity")
+points(regPat[seq_len(min(npoints(regPat), numEvents))], pch = Pch, cex = Cex)
+par(mar = c(4,4,1,3))
+plot(densCsr, main = "", xlim = xLims, ylim = yLims, lty ="dashed", xlab = "Nearest-neighbour distance", ylab = "Density")
+plot(densAgg, main = "", xlim = xLims, ylim = yLims, xlab = "Nearest-neighbour distance", ylab = "Density")
+lines(densCsr, main = "", xlim = xLims, lty ="dashed")
+plot(densReg, main = "", xlim = xLims, ylim = yLims, xlab = "Nearest-neighbour distance", ylab = "Density")
+lines(densCsr, main = "", xlim = xLims, lty ="dashed")
+par(mfrow = c(1,1))
+dev.off()
+```
+
+```{r crDensPIPP, include = FALSE, fig.cap = "Figure \\ref{fig:CSRdensPI} from the main paper with AUC graphs added. The bottom shows opulation PP-plots showing the PI representation as area-under-the-curve (AUC): the integral of the evaluation of the G-function under the null in the observed quantiles \\parencite{Thas2012}. The AUC is shaded in grey with its numeric value shown in the plot titles; the dotdashed line has intercept 0 and slope 1."}
+pdf("Graphs/CSRdensPIpp.pdf", height = 5.5, width = 6)
+par(mfrow = c(3,3), mar = c(0.7, 0.5, 2, 0.5))
+# CSR
+plot(Win, main = "Complete spatial randomness\n(CSR)")
+points(csr, pch = Pch, cex = Cex)
+# Aggregation
+plot(Win, main = "Aggregation")
+points(aggPat[seq_len(numEvents)], pch = Pch, cex = Cex)
+# Regularity
+plot(Win, main = "Regularity")
+points(regPat[seq_len(min(npoints(regPat), numEvents))], pch = Pch, cex = Cex)
+par(mar = c(4,4.3,2.5,2.4))
+plot(densCsr, main = "", xlim = xLims, ylim = yLims, lty ="dashed", xlab = "Nearest-neighbour distance", ylab = "Density")
+plot(densAgg, main = paste("PI =", signif(PIagg, 2)), xlim = xLims, ylim = yLims, xlab = "Nearest-neighbour distance", ylab = "Density", lty = "dotted")
+lines(densCsr, main = "", xlim = xLims, lty ="dashed")
+plot(densReg, main = paste("PI =", signif(PIreg, 2)), xlim = xLims, ylim = yLims, xlab = "Nearest-neighbour distance", ylab = "Density")
+lines(densCsr, main = "", xlim = xLims, lty ="dashed")
+ecdfAgg = ecdf(nnAgg);ecdfReg = ecdf(nnReg)
+plotAUC(ecdfCSr, ecdfCSr, main = paste("AUC =", 0.5)) #Following the definition in Thas2012, p626
+plotAUC(ecdfAgg, ecdfCSr, main = paste("AUC =", signif(PIagg, 2))) 
+plotAUC(ecdfReg, ecdfCSr, main = paste("AUC =", signif(PIreg, 2))) 
+par(mfrow = c(1,1))
+dev.off()
+```
+
+\printbibliography
