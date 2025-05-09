@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-# smoppix
-Single-MOlecule sPatial omics data analysed through the Probabilistic IndeX
-=======
 
 This repository contains all code for analyses for the paper “Unified
 nonparametric analysis of single-molecule spatial omics data using
@@ -16,4 +12,3 @@ can be installed as:
 library(BiocManager)
 install("smoppix")
 ```
->>>>>>> 33d8752 (First commit)
