@@ -18,7 +18,7 @@ knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE,
                       purl = TRUE, fig.show = "hold", fig.pos = "p")
 libs = c("ggplot2", "BiocParallel", "reshape2", "grid", "psych", "spatstat", "xtable",
          "gplots", "openxlsx", "SpatialExperiment", "glmnet", "SPIAT", "png", "tiff",
-         "lmerTest", "spicyR", "smoppix", "parallel", "peakRAM", "extraDistr")
+         "lmerTest", "spicyR", "smoppix", "parallel", "peakRAM", "extraDistr", "funkycells")
 for (i in libs){
   library(i, character.only = TRUE, quietly = TRUE)
 };rm(i, libs)
@@ -241,7 +241,7 @@ unDrs = unique(hypYang$drs)
 ```
 
 \begin{figure}
-\includegraphics[width = 0.3\linewidth, angle =90]{Graphs/Calcofluor.png}
+\includegraphics[width = 0.3\linewidth, angle =90]{Data/Yang2023/Calcofluor.png}
 \caption{Calcofluor white staining of root 2, section 2 at day 0 of the \textit{smFISH} experiment by \textcite{Yang2023} with molecules of two example transcripts shown as dots. The cell walls are visible in light grey. More images can be found at \url{https://bioinformatics.psb.ugent.be/webtools/spatial-transcriptomics/selaginella/}.\label{fig:plotTiffYang}}
 \end{figure}
 
@@ -392,7 +392,6 @@ dev.off()
 ```{r spicyR}
 minObs = 20
 if(!file.exists(spicyFileYang <- "Results/spicyYang.RData")){
-    load("Data/Yang2023.RData")
     df = Reduce(rbind,lapply(seq_len(nrow(hypYang)), function(x){
         data.frame(coords(hypYang[x, "ppp", drop = TRUE]), marks(hypYang[x, "ppp", drop = TRUE]), hypYang[x, "day", drop = TRUE],
                    hypYang[x, "root", drop = TRUE], hypYang[x, "section", drop = TRUE], hypYang[x, "drs", drop = TRUE])
@@ -775,16 +774,35 @@ names(EngRes) = names(EngListOvLmms)
 ```
 
 ```{r timingsEng, eval = FALSE}
-register(SerialParam())
-timEng = system.time({
-    EngListOvTim <- estPis(hypEng, pis = c("nnPairCell"), null = "CSR", features = unGenes[1:10])
-    EngListOvTim = addWeightFunction(EngListOvTim)
-    EngListOvLmms = fitLMMs(EngListOvTim, fixedVars = "experiment", randomVars = "image")
+samSizes = seq(5, 30, by = 3)
+names(samSizes) = samSizes
+comSizeFun = function(x) x*(x-1)/2
+combSizes = comSizeFun(samSizes)
+if(!file.exists(timingsNumFile <- "Results/timingsEng.RData")){
+    register(SerialParam())
+    timEngSerial = sapply(samSizes, function(ss){
+        system.time({
+            EngListOvTim <- estPis(hypEng, pis = c("nnPairCell"), null = "CSR", 
+                                   features = unGenes[seq_len(ss)])
+            EngListOvTim = addWeightFunction(EngListOvTim)
+            EngListOvLmms = fitLMMs(EngListOvTim, fixedVars = "experiment", randomVars = "image")
+        })[3]
     })
-timEng8 = system.time(EngListOvTim <- estPis(hypEng, pis = c("nnPairCell"), null = "CSR", features = unGenes[1:8]))
+    save(timEngSerial, file = timingsNumFile)
+} else load(timingsNumFile)
+par(mfrow = c(1,2))
+plot(timEngSerial, x = samSizes)
+fit = lm(timEngSerial~samSizes)
+fitComb = lm(timEngSerial~combSizes)
+lines(samSizes, predict(fit))
+lines(samSizes, predict(fitComb), col = "blue")
+plot(timEngSerial, x= combSizes)
+par(mfrow = c(1,1))
+predLin = predict(fit, newdata = data.frame(samSizes = samPred <- c(1e1, 3e1, 1e2, 1e3, 1e4)))/3600
+predQuad = predict(fitComb, newdata = data.frame(combSizes = comSizeFun(samPred)))/3600
 ```
 
-We reanalysed a dataset by \textcite{Eng2019}, containing measurements of 10,000 genes in NIH/3T3 mouse fibroblast cells. Five z-slices with z-steps of 1 $\mu$m were taken across multiple fields of view (FOVs). To demonstrate robustness, the experiment was performed twice on separate sections (the experiment variable). The cells were gated by hand based on DAPI staining. Here we test for vicinity to and remoteness from cell wall and cell centroid and for within-cell aggregation for one gene at the time. No bivariate analyses were performed because they were too computationally intensive. \emph{smoppix} found `r sum(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5)` genes significantly close to the cell edge and `r sum(EngRes$centroid[, "pAdj"] < sigLevel & EngRes$centroid[, "Estimate"] < 0.5)` genes significantly close to the centroid compared to CSR wihtin the cell; the most significant ones in each case are shown in \fref{fig:Eng} in the main text. Also, \smop found `r sum(na.rm = TRUE, EngRes$nnCell[, "pAdj"] < sigLevel & EngRes$nnCell[, "Estimate"] < 0.5)` genes aggregated within the cell compared to CSR (see \fref{fig:aggCell}).
+We reanalysed a dataset by \textcite{Eng2019}, containing measurements of 10,000 genes in NIH/3T3 mouse fibroblast cells. Five z-slices with z-steps of 1 $\mu$m were taken across multiple fields of view (FOVs). To demonstrate robustness, the experiment was performed twice on separate sections (the experiment variable). The cells were gated by hand based on DAPI staining. Here we test for vicinity to and remoteness from cell wall and cell centroid and for within-cell aggregation for one gene at the time. No bivariate analyses were performed as they would take too long. A bivariate analysis with the 1,000 most highly expressed genes is expected to take around 200 cpu hours, an analysis on all 10,000 genes would take roughly 20,000 cpu hours. \emph{smoppix} found `r sum(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5)` genes significantly close to the cell edge and `r sum(EngRes$centroid[, "pAdj"] < sigLevel & EngRes$centroid[, "Estimate"] < 0.5)` genes significantly close to the centroid compared to CSR within the cell; the most significant ones in each case are shown in \fref{fig:Eng} in the main text. Also, \smop found `r sum(na.rm = TRUE, EngRes$nnCell[, "pAdj"] < sigLevel & EngRes$nnCell[, "Estimate"] < 0.5)` genes aggregated within the cell compared to CSR (see \fref{fig:aggCell}).
 
 ```{r centroidCell, include = FALSE}
 numCellsEng = 30L
@@ -946,16 +964,7 @@ for(i in rownames(hypDar)){
 darRelMat = darTabMat/rowSums(darTabMat)
 tabTime = apply(darTabMat, 2, function(x) tapply(x, hypDar$time, sum))
 genesDarOut = unGenesDar[colSums(tabTime<100)>=1]
-rm(hypDar)
-getHypDarSub = function(genes){
-    id10h = tapply(rownames(hypDar)[hypDar$time == "10h"], hypDar$fov[hypDar$time == "10h"], function(x){
-        names(which.max(sapply(hypDar$tabObs[x], function(y) sum(y[genes]))))
-    })
-    id35h = tapply(rownames(hypDar)[hypDar$time == "35h"], hypDar$fov[hypDar$time == "35h"], function(x){
-        names(which.max(sapply(hypDar$tabObs[x], function(y) sum(y[genes]))))
-    })
-    hypDar[c(id10h, id35h), ]
-}
+#rm(hypDar)
 ```
 
 ```{r DarOverall}
@@ -1124,15 +1133,15 @@ diff22 = attr(vennSpicy,"intersections")$`spicyR\naggregated:smoppix\nregular`
 plotExplore(hypDarSub, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercept"] > 0, "spicy_Intercept_pVal"])), Nrow = 3) 
 ```
 
-```{r mostRegSpicy, fig.cap = "Most significantly regular gene according to \\spicy (not significant for \\smop).\\label{fig:regSpicy}"}
+```{r mostRegSpicy, fig.cap = "Most significantly regularly spaced gene according to \\spicy (not significant for \\smop).\\label{fig:regSpicy}"}
 plotExplore(hypDarSub, Nrow = 3, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercept"] < 0, "spicy_Intercept_pVal"])))
 ```
 
-```{r diffSpicy2, fig.cap = "Gene found aggregated by \\spicy but regular by \\smop\\label{fig:diffSpicy2}", fig.height = 7}
+```{r diffSpicy2, fig.cap = "Gene found aggregated by \\spicy but regularly spaced by \\smop\\label{fig:diffSpicy2}", fig.height = 7}
 plotExplore(hypDarSub,Nrow = 3,  rownames(DarRes$nn[diff22, "pAdj", drop = FALSE])[1], Cex = 0.8)
 ```
 
-`r length(diff22)` genes were found to be aggregated by \spicy but regular according to smoppix, one example is shown in \fref{fig:diffSpicy2}. These results also reflect the difference in null hypothesis tested. \spicy considers only the densities of the genes themselves for estimating a baseline, whereas \smop considers the background of all other molecules as null. The Venn diagram for the bivariate analysis is shown in \fref{fig:vennSpicyBi}, with \spicy finding a lot of colocalization (see Figures \ref{fig:spicyColoc} and \ref{fig:spicyAntiloc} for most significant results), and smoppix more antilocalization. The gene found most significantly antilocalized by smoppix among the ones found colocalized by \spicy is shown in Figure \ref{fig:spicyDiffAntiloc}; especially at time 10h there are indeed regions with only one of both genes expressed.
+`r length(diff22)` genes were found to be aggregated by \spicy but regularly spaced according to smoppix, one example is shown in \fref{fig:diffSpicy2}. These results also reflect the difference in the null hypothesis tested. \spicy considers only the densities of the genes themselves for estimating a baseline, whereas \smop considers the background of all other molecules as null. The Venn diagram for the bivariate analysis is shown in \fref{fig:vennSpicyBi}, with \spicy finding a lot of colocalization (see Figures \ref{fig:spicyColoc} and \ref{fig:spicyAntiloc} for most significant results), and smoppix more antilocalization. The gene found most significantly antilocalized by smoppix among the ones found colocalized by \spicy is shown in Figure \ref{fig:spicyDiffAntiloc}; especially at time 10h there are indeed regions with only one of both genes expressed.
 
 ```{r vennSpicyColoc, fig.height = 5.7, fig.cap = "Venn diagram of overlap between \\smop and \\spicy results for bivariate analysis.\\label{fig:vennSpicyBi}"}
 ColocMatSpicy = cbind(ColocMatSpicy, "pAdj_Intercept"= p.adjust(ColocMatSpicy[, "spicy_Intercept_pVal"], method = "BH"),
@@ -1161,7 +1170,7 @@ plotExplore(hypDarSub, Nrow = 3, names(which.min(DarRes$nnPair[diff2Bi, "pAdj"])
 
 ## Probabilistic indices serve as interpretable predictors in tumor classification
 
-We reanalysed a dataset on breast cancer sections from 33 patients \parencite{Keren2018}. Locations of 16 different cell types were measured in a single section per patient. The tumors were categorized into two classes, "compartimentalised" and "mixed" by the authors of the original article \parencite{Keren2018}. A plot highlighting the tumor cells is shown in \fref{fig:explTNBC} in the main text. In addition, the age of the patients was recorded, which shows an association to tumor type (\fref{fig:boxAge}). There are also differences in cell count across the tumor types (\fref{fig:boxCount}). Here we test whether PIs can distinguish between tumor types, and whether they can serve as interpretable predictors. 
+We reanalysed a dataset on breast cancer sections from 33 patients \parencite{Keren2018}, available through the _funkycells_ R-package \parencite{VanderDoes2023}. Locations of 16 different cell types were measured in a single section per patient. The tumors were categorized into two classes, "compartimentalised" and "mixed" by the authors of the original article \parencite{Keren2018}. A plot highlighting the tumor cells is shown in \fref{fig:explTNBC} in the main text. In addition, the age of the patients was recorded, revealing an association between age and tumor type (\fref{fig:boxAge}). There are also differences in cell type counts across the tumor types (\fref{fig:boxCount}). Here we test whether PIs can distinguish between tumor types, and whether they can serve as interpretable predictors. 
 
 ```{r TNBC}
 if(!file.exists(datFileTNBC <- "Data/TNBC.RData")){
@@ -1185,11 +1194,8 @@ if(!file.exists(piTNBCfile <- "Results/piTNBC.RData")){
 
 ```{r explTNBC, fig.cap = "Exploratory plot of breast cancer data.\\label{fig:explTNBC}", include = FALSE}
 #Cell counts
-cellCounts = matrix(0, nrow(pisTNBC$hypFrame), length(getFeatures(pisTNBC$hypFrame)), 
-                    dimnames = list(pisTNBC$hypFrame$Person, getFeatures(pisTNBC$hypFrame)))
-for(to in as.character(pisTNBC$hypFrame$Person)){
-    cellCounts[to, names(pisTNBC$hypFrame[[which(pisTNBC$hypFrame$Person==to), "tabObs"]])] = pisTNBC$hypFrame[[which(pisTNBC$hypFrame$Person==to), "tabObs"]]
-}
+cellCounts = makeTabObsMat(pisTNBC$hypFrame, pisTNBC$hypFrame$Person)
+
 pdf("GraphsPaper/exploreTNBC.pdf", height = 5.8) 
 hypTNBCcopy = hypTNBC
 hypTNBCcopy$ppp = lapply(hypTNBCcopy$ppp, function(x){
@@ -1294,7 +1300,7 @@ ageRes = t(sapply(TNBCspiatLms, function(x) x["age", c("Estimate", "Std. Error",
 ```{r spiatSignif, results  ="asis"}
 totTab = rbind(uniSigSpiat, biSigSpiat) 
 colnames(totTab)[2:3] = c("Standard error", "P-value")
-print.xtable(xtable(totTab, caption = "\\label{tab:spiattnbc}Table of significant differences in univariate and bivariate neighbourhood enrichments between tumor types. The coefficients shown are the average difference in log-ratio of the proportion of molecules in the neighbourhood over overall in the image, of the 'mixed' tumors minus the 'compartimentalised' tumors. For the bivariate results (cell type pairs separated by hyphens), the estimate refers to enrichment of the second cell type in the vicinity of the first.", digits = 2,  display = c("s", "f", "f", "e", "e")), comment = FALSE)
+print.xtable(xtable(totTab, caption = "\\label{tab:spiattnbc}Table of significant differences in univariate and bivariate neighbourhood enrichments between tumor types. The estimates shown are the average difference (the 'mixed' tumors minus the 'compartimentalised' tumors) in log-ratio of the proportion of molecules in the neighbourhood over overall in the image. For the bivariate results (cell type pairs separated by hyphens), the estimate refers to enrichment of the second cell type in the vicinity of the first. Positive estimates indicate more aggregation or colocalization in the mixed group, and vice versa for negative estimates.", digits = 2,  display = c("s", "f", "f", "e", "e")), comment = FALSE)
 ```
 
 ```{r compareSpicySmoppixVanderdoes, fig.cap = "Boxplots of univariate nearest-neighbour distance PI by \\smop (left), u-statistic by \\textit{spicyR} (center) and NE log-ratio (right) (y-axis) as a function of tumor type (x-axis) for tumor cells. The difference is pronounced for \\smop and NE, which capture the aggregation of tumor cells as seen from \\fref{fig:explTNBC} in the main text. The difference in \\textit{spicyR}'s test statistic is less pronounced and even suggests stronger aggregation of tumor cells in the mixed class.\\label{fig:diffVanderdoes}", fig.height = 4.25}
@@ -1311,7 +1317,7 @@ par(mfrow = c(1,1))
 
 ### Prediction models \label{sec:predModels}
 
-Next we investigate whether the inclusion of PI's as predictor of the tumor type, on top of age and cell type count, improves predictive accuracy. We use a penalized linear regression model (LASSO) \parencite{Tibshirani1996} implemented in the _glmnet_ package \parencite{Friedman2010} as prediction model, and assess its predictive accuracy (defined as the proportion of correctly classified tumors) through 20-fold cross-validation. The penalty parameter $\lambda$ is tuned through an inner cross-validation loop. The following sets of predictors are used in the model: patient age is always included as predictor, and cell counts or PIs or both are included in additional models. When only age is included, a regular generalized linear model is used for prediction, without regularization. As feature selection procedure for the PIs, \smop is applied to the observations in the training folds with tumor type and age as fixed effects, and PIs significantly associated with tumor type are retained as predictors for the LASSO model; their missing values are set to 0.5. The splitting into folds was repeated 200 times, out-of-sample accuracy and its standard error were estimated following \textcite{Bates2023}. The results are shown in Table \ref{tab:acc} in the main text, and confirm that spatial localization patterns add information on tumor type on top of cell counts and patient age. A similar analysis was carried out for NE log-ratios as predictors, yielding similar results to the PIs as shown in Table \ref{tab:accAlt}. Since \spicy does not declare any cell types significant, no cell type (pairs) were filtered out and all u-statistics are fed as predictors to the LASSO model. Yet inclusion of these u-statistics deteriorates the predictive performance (see Table \ref{tab:accAlt}).
+Next we investigated whether the inclusion of PI's as predictor of the tumor type, on top of age and cell type counts, improves predictive accuracy. We use a penalized linear regression model (LASSO) \parencite{Tibshirani1996} implemented in the _glmnet_ package \parencite{Friedman2010} as prediction model, and assess its predictive accuracy (defined as the proportion of correctly classified tumors) through 20-fold cross-validation. The penalty parameter $\lambda$ is tuned through an inner cross-validation loop. The following sets of predictors are used in the model: patient age is always included as predictor, and cell type counts or PIs or both are included in additional models. When only age is included, a regular generalized linear model is used for prediction, without regularization. As feature selection procedure for the PIs, \smop is applied to the observations in the training folds with tumor type and age as fixed effects, and PIs significantly associated with tumor type are retained as predictors for the LASSO model; their missing values are set to 0.5. The splitting into folds was repeated 200 times and out-of-sample accuracy and its standard error were estimated following \textcite{Bates2023}. The results are shown in Table \ref{tab:acc} in the main text, and confirm that spatial localization patterns add information on tumor type on top of cell counts and patient age. A similar analysis was carried out using NE log-ratios as predictors, yielding similar results to the PIs as shown in Table \ref{tab:accAlt}. Since \spicy does not declare any cell types significant, no cell type (pairs) were filtered out and all u-statistics are fed as predictors to the LASSO model. Yet inclusion of these u-statistics deteriorates the predictive performance (see Table \ref{tab:accAlt}).
 
 ```{r fitCVsave}
 nFolds = 20;nReps = 200;nPCs = 3
@@ -1464,11 +1470,10 @@ print.xtable(comment = FALSE, xtable(t(cvMatAlt), caption = "Average predictive 
 
 ## Calibration: the p-value distribution under gene label permutation
 
-To assess calibration of the statistical tests, we repeatedly permute the gene labels in the \emph{S. moellendorfii} root \parencite{Yang2023} and bacterial biofilm \parencite{Dar2021} datasets and then apply the regular \smop, \spicy and NE analyses (NE could not be applied to the biofilm dataset for computational reasons). The resulting p-value distributions are shown in Figures \ref{fig:qqYang}-\ref{fig:qqDar} and suggest \smop to be a well calibrated test. The slight peak of low p-values for the univariate nearest-neighbour distances in \fref{fig:qqDar} is mainly caused by highly expressed genes and is likely a result of the compositional effect as discussed in Supplementary Section \ref{sec:comp}. This effect decreases as the dimensionality of the data decreases. The qq-plots for \spicy and NE reveal strong and moderate departures from uniformity, respectively. 
+To assess calibration of the statistical tests, we repeatedly permute the gene labels in the \emph{S. moellendorfii} root \parencite{Yang2023} and bacterial biofilm \parencite{Dar2021} datasets and then apply the regular \smop, \spicy and NE analyses (NE could not be applied to the biofilm dataset for computational reasons). The resulting p-value distributions are shown in Figures \ref{fig:qqYang}-\ref{fig:qqDar} and suggest \smop to be a well-calibrated test. The slight peak of low p-values for the univariate nearest-neighbour distances in \fref{fig:qqDar} is mainly caused by highly expressed genes and is likely a result of the compositional effect discussed in Supplementary Section \ref{sec:comp}. This effect decreases as the dimensionality of the data decreases. The qq-plots for \spicy and NE reveal strong and moderate departures from uniformity, respectively. 
 
 ```{r yangNull}
 if(!file.exists(YangNullFile <- "Results/YangNull.RData")){
-    load("Data/Yang2023.RData")
     yangNullSims = mclapply(mc.cores = nCores, seq_len(nSims), function(i){
         cat(i, "\t")
         if(!file.exists(nullFile <- paste0("Results/simsNullYang/sim", i, ".RData"))){
@@ -1493,7 +1498,6 @@ if(!file.exists(YangNullFile <- "Results/YangNull.RData")){
 
 ```{r yangNullAlt}
 if(!file.exists(YangNullAltFile <- "Results/YangNullAlt.RData")){ 
-    load("Data/Yang2023.RData")
     yangNullAltSims = mclapply(mc.cores = nCores, seq_len(nSims), function(i){
         cat(i, "\t")
         if(!file.exists(nullFile <- paste0("Results/simsNullYangAlt/sim", i, ".RData"))){
@@ -1545,7 +1549,6 @@ if(!file.exists(YangNullAltFile <- "Results/YangNullAlt.RData")){
 
 ```{r darnull}
 if(!file.exists(DarNullFile <- "Results/DarNull.RData")){ 
-    load("Data/dar2021.RData")
     DarNullSims = mclapply(mc.cores = nCores, seq_len(nSims), function(i){
         cat(i, "\t")
         if(!file.exists(nullFile <- paste0("Results/simsNullDar/sim", i, ".RData"))){
@@ -1570,7 +1573,6 @@ if(!file.exists(DarNullFile <- "Results/DarNull.RData")){
 
 ```{r darnullalt}
 if(!file.exists(DarNullAltFile <- "Results/DarNullAlt.RData")){
-    load("Data/dar2021.RData"); load("Results/spiatsDar.RData")
     DarNullAltSims = lapply(seq_len(nSims), function(i){
         cat(i, "\t")
         if(!file.exists(nullFile <- paste0("Results/simsNullDarAlt/sim", i, ".RData"))){
@@ -1633,7 +1635,7 @@ foo = lapply(encVec, function(x){qplotUnif(unlist(lapply(pvalsYangEN, function(y
 par(mfrow = c(1,1))
 ```
 
-```{r qqPlotsDar, fig.cap = "\\label{fig:qqDar}qq-plots versus standard uniform quantiles of \\smop and \\spicy p-values after permutation of the gene labels of the bacterial biofilm data by \\textcite{Dar2021}. The EN method was too computationally intensive to be run on this dataset."}
+```{r qqPlotsDar, fig.cap = "\\label{fig:qqDar}qq-plots versus standard uniform quantiles of \\smop and \\spicy p-values after permutation of the gene labels of the bacterial biofilm data by \\textcite{Dar2021}. The NE method was too computationally intensive to be run on this dataset."}
 pvalsUnlistDar = lapply(nnVec, function(x) unlist(lapply(DarNullSims, function(y) y[[x]])))
 pvalsYangDarSpic =  lapply(DarNullAltSims, function(y) {
     id = sapply(names(y$spicyR), function(z) strsplit(z, split = "__")[[1]])
@@ -1649,7 +1651,7 @@ par(mfrow = c(1,1))
 
 ## Invariance under subsampling \label{sec:invar}
 
-We investigate the sensitivity to density differences through a series of subsampling experiments for \smop, \spicy and NE. The molecules of the point patterns from the \emph{S. moellendorfii} root \parencite{Yang2023} and mouse fibroblast \parencite{Eng2019} datasets were randomly subsampled to proportions running from 0.9 to 0.4 by decrements of 0.1, and measures of aggregation and colocalization and PIs for distance to edge and centroid were calculated for the subsampled datasets. For the univariate PIs, the 10 most expressed genes were used, for the bivariate PIs the pairs of 11th-20th most expressed genes were paired with the 21st-30th most expressed genes. Choosing non-overlapping sets of genes guarantees independence in the coming regression analysis. The estimated PIs, \spicy's u-statistic and NE log-ratio are plotted as a function of subsampling proportion in Figures \ref{fig:subSamUni}-\ref{fig:subSamBiSpiat} for a subset of genes. To formally test sensitivity to subsampling, we fit linear models with the measure of spatial patterning (either PI, u-statistic or log-ratio) as outcome as a function of subsampling proportion, day and root-gene (pair) combination for the _S. moellendorfii_ dataset, or as a function of subsampling proportion and experiment-fov-gene combination for the mouse fibroblast dataset. The estimated slopes and associated p-values are shown in Table \ref{tab:subsam}. The univariate nearest-neighbour PI is slightly sensitive to density changes, as observed and background nearest-neighbour distributions do not change in the same way under subsampling. In addition, both u-statistics are sensitive to the subsampling proportion. Yet the changes in the statistics with subsampling are rather modest compared to the overall variability of the test statistics in the datasets, quantified through the interquartile ranges (IQRs). All other measures are invariant to subsampling.
+We investigated the sensitivity to density differences through a series of subsampling experiments for \smop, \spicy and NE. The molecules of the point patterns from the \emph{S. moellendorfii} root \parencite{Yang2023} and mouse fibroblast \parencite{Eng2019} datasets were randomly subsampled to proportions running from 0.9 to 0.4 by decrements of 0.1, and measures of aggregation and colocalization and PIs for distance to edge and centroid were calculated for the subsampled datasets. For the univariate PIs, the 10 most expressed genes were used, for the bivariate PIs the pairs of 11th-20th most expressed genes were paired with the 21st-30th most expressed genes. Choosing non-overlapping sets of genes guarantees independence in the coming regression analysis. The estimated PIs, \spicy's u-statistics and NE log-ratios are plotted as a function of subsampling proportion in Figures \ref{fig:subSamUni}-\ref{fig:subSamBiSpiat} for a subset of genes. To formally test sensitivity to subsampling, we fit linear models with the measure of spatial patterning (either PI, u-statistic or log-ratio) as outcome as a function of subsampling proportion, day and root-gene (pair) combination for the _S. moellendorfii_ dataset, or as a function of subsampling proportion and experiment-fov-gene combination for the mouse fibroblast dataset. The estimated slopes and associated p-values are shown in Table \ref{tab:subsam}. The univariate nearest-neighbour PI is slightly sensitive to density changes, as observed and background nearest-neighbour distributions do not change in the same way under subsampling. In addition, both the univariate and bivariate u-statistics are sensitive to density changes. Yet the changes in the statistics with subsampling are rather modest compared to the overall variability of the test statistics in the datasets, as quantified through the interquartile ranges (IQRs). All other measures are invariant to subsampling.
 
 ```{r subsampling}
 pSeq = seq(0.9, 0.4, by = -0.1); names(pSeq) = pSeq
@@ -1711,7 +1713,7 @@ if(!file.exists(spiatYangSubsamFile <- "Results/subsamYangSpiat.RData")){
 numPlotSubSam = 4
 ```
 
-```{r subsamPlot, fig.cap = paste0("Estimated univariate nearest-neighbour PIs (y-axis) of ", numPlotSubSam, " most expressed genes (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUni}"), fig.height = 6}
+```{r subsamPlot, fig.cap = paste0("Estimated univariate nearest-neighbour PIs (y-axis) of the ", numPlotSubSam, " most highly expressed genes (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUni}"), fig.height = 6}
 stripTextSizeSubsam = 6
 pisSub = lapply(subSamListYang, function(x){ 
     rbind(Reduce(f = rbind, lapply(mostExprFeat, function(i){
@@ -1733,7 +1735,7 @@ ggplot(data = pisSubMoltAgg[pisSubMoltAgg$PI == "nn" & pisSubMoltAgg$gene %in% m
     geom_line() + facet_grid(gene~., scales = "free_y") + theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion") + ylab("Univariate nearest-neighbour PI") 
 ```
 
-```{r subsamPlotBI, fig.cap = paste0("Estimated bivariate nearest-neighbour PIs (y-axis) of ", numPlotSubSam, " most expressed gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamBi}"), fig.height = 6}
+```{r subsamPlotBI, fig.cap = paste0("Estimated bivariate nearest-neighbour PIs (y-axis) of the ", numPlotSubSam, " most highly expressed gene pairs (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamBi}"), fig.height = 6}
 ggplot(data = pisSubMoltAgg[pisSubMoltAgg$PI == "nnPair" & pisSubMoltAgg$gene %in% gsub("--", "-", mostExprPairs[seq_len(numPlotSubSam)]),], aes(x = Proportion, y = Estimate, group = dr, col = dr)) + 
     geom_line() + facet_grid(gene~., scales = "free_y") + theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root")+ xlab("Subsampling proportion") + ylab("Bivariate nearest-neighbour PI") 
 ```
@@ -1769,7 +1771,7 @@ if(!file.exists(pisSubEngFile <- "Results/pisSubEng.RData")){
 } else load(pisSubEngFile)
 ```
 
-```{r subsamPlotEng, fig.cap = "Estimated univariate intracellular PIs (y-axis) for vicinity to centroid or edge (columns) of 10 most expressed genes (rows) as a function of subsampling proportion (x-axis) of the mouse fibroblast data by \\textcite{Eng2019}, averaged over cells within fields of view. Separate lines are drawn per field of view and experiment (colours).\\label{fig:subSamCellEng}", fig.height = 10.5}
+```{r subsamPlotEng, fig.cap = "Estimated univariate intracellular PIs (y-axis) for vicinity to centroid or edge (columns) of the 10 most highly expressed genes (rows) as a function of subsampling proportion (x-axis) for the mouse fibroblast data by \\textcite{Eng2019}, averaged over cells within fields of view. Separate lines are drawn per field of view and experiment (colours).\\label{fig:subSamCellEng}", fig.height = 10.5}
 pisSubMoltEng = melt(pisSubEng, variable.name = "PI", value.name = "Estimate")
 colnames(pisSubMoltEng)[6] = "Proportion" 
 pisSubMoltEng$Proportion = as.double(pisSubMoltEng$Proportion)
@@ -1780,7 +1782,7 @@ ggplot(data = pisSubMoltEngCell, aes(x = Proportion, y = Estimate, group = fe, c
     xlab("Subsampling proportion") + ylab("Probabilistic index")
 ```
 
-```{r subsamspicyPlot, fig.cap = paste0("Estimated univariate u-statistic (y-axis) of ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUUni}"), fig.height = 5}
+```{r subsamspicyPlot, fig.cap = paste0("Estimated univariate u-statistic (y-axis) of the", numPlotSubSam, " most highly expressed genes (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUUni}"), fig.height = 5}
 USub = lapply(subSamListYangSpicy, function(x){
     rbind(Reduce(f = rbind, lapply(mostExprFeat, function(i){
             data.frame("Estimate" = x$pairwiseAssoc[[paste0(i, "__", i)]],
@@ -1802,13 +1804,13 @@ ggplot(data = uSubMoltAgg[uSubMoltAgg$uStatistic == "univariate"  & uSubMoltAgg$
     geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Univariate U-statistic")
 ```
 
-```{r subsamspicyPlotBi, fig.cap = paste0("Estimated bivariate u-statistic (y-axis) of ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUBi}"), fig.height = 5}
+```{r subsamspicyPlotBi, fig.cap = paste0("Estimated bivariate u-statistic (y-axis) of the ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUBi}"), fig.height = 5}
 uSubMoltAgg$gene = gsub("--", "-", uSubMoltAgg$gene)
 ggplot(data = uSubMoltAgg[uSubMoltAgg$uStatistic == "bivariate"  & uSubMoltAgg$gene %in% gsub("--", "-", mostExprPairs[seq_len(numPlotSubSam)]),], aes(x = Proportion, y = Estimate, group = dr, col = dr)) +
     geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Bivariate U-statistic")
 ```
 
-```{r subsamPlotSpiat, fig.cap = paste0("Estimated log-ratio of univariate neighbourhood enrichment by NE (y-axis) of ", numPlotSubSam, " most expressed genes (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUniSpiat}"), fig.height = 5}
+```{r subsamPlotSpiat, fig.cap = paste0("Estimated log-ratio of univariate neighbourhood enrichment by NE (y-axis) of the ", numPlotSubSam, " most highly expressed genes (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUniSpiat}"), fig.height = 5}
 lorsSub = lapply(subSamYangSpiats, function(x){  
     rbind(Reduce(f = rbind, lapply(mostExprFeat, function(i){
             data.frame("Estimate" = x$loMat[i,],
@@ -1827,7 +1829,7 @@ lorsSubMoltAgg$dr = paste0(lorsSubMoltAgg$day, lorsSubMoltAgg$root)
 ggplot(data = lorsSubMoltAgg[lorsSubMoltAgg$Enrichment == "univariate" & lorsSubMoltAgg$gene %in% mostExprFeat[seq_len(numPlotSubSam)],], aes(x = Proportion, y = Estimate, group = dr, col = dr)) + geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Univariate log-ratio")
 ```
 
-```{r subsamPlotBIspiat, fig.cap = paste0("Estimated log-ratio of bivariate neighbourhood enrichment by NE (y-axis) of ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) of the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamBiSpiat}"), fig.height = 5}
+```{r subsamPlotBIspiat, fig.cap = paste0("Estimated log-ratio of bivariate neighbourhood enrichment by NE (y-axis) of the ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamBiSpiat}"), fig.height = 5}
 lorsSubMoltAgg$gene = gsub("--", "-", lorsSubMoltAgg$gene)  
 ggplot(data = lorsSubMoltAgg[lorsSubMoltAgg$Enrichment == "bivariate" & lorsSubMoltAgg$gene %in% gsub("--", "-", mostExprPairs[seq_len(numPlotSubSam)]),], aes(x = Proportion, y = Estimate, group = dr, col = dr)) + geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) +  scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion") + ylab("Bivariate log-ratio")
 ```
@@ -1890,15 +1892,14 @@ subMat = rbind("Univariate PI" = c(pValPIuni, nnAll), "Bivariate PI" = c(pValPIb
                "Univariate u-statistic" = c(estsSpicyUni, spicUni), "Bivariate u-statistic" = c(estsSpicyBi, spicBi))
 subMat[, 1] = signif(subMat[, 1]/10, 3) #10% interpretation
 colnames(subMat) = c("Slope", "P-value", "IQR")
-print.xtable(comment = FALSE, xtable(subMat, align = "|r|lr|r|", display = c("s", "f", "e", "f"), digits = cbind(rep(1, nrow(subMat)), c(5,5,5,5,4,4,1,1),rep(1, nrow(subMat)),rep(2, nrow(subMat))), caption = "Estimated slopes of association measure as a function of subsampling proportion and associated p-values. The slope is the expected change in the spatial measure associated with a 10\\% increase in subsampling proportion. IQR is the interquartile range of the spatial measure of the entire real datasets. NE: neighbourhood enrichment\\label{tab:subsam}"), hline.after = c(-1,0, 4, 6, nrow(subMat)))
-write.csv(subMat, file = "Results/subMat.csv")
+print.xtable(comment = FALSE, xtable(subMat, align = "|r|lr|r|", display = c("s", "f", "e", "f"), digits = cbind(rep(1, nrow(subMat)), c(5,5,5,5,4,4,1,1),rep(1, nrow(subMat)),rep(2, nrow(subMat))), caption = "Estimated slopes of association measure as a function of subsampling proportion and associated p-values. The centroid and edge PI are estimated on the dataset by \\textcite{Eng2019}, all others on the dataset by \\textcite{Yang2023}. The slope is the expected change in the spatial measure associated with a 10\\% increase in subsampling proportion, IQR is the interquartile range of the spatial measure of the entire real dataset. NE: neighbourhood enrichment\\label{tab:subsam}"), hline.after = c(-1,0, 4, 6, nrow(subMat)))
 ```
 
 \clearpage
 
 ## Time and memory benchmark \label{sec:timing}
 
-Timings and RAM usage on an Intel Core i5-11400H 2.70GHz processor were investigated for \smop, \emph{spicyR} and NE for increasing number of molecules and genes on synthetic point patterns. The point patterns were generated under CSR on a square area of 10 $\times$ 10, the neighbourhood size for NE was set at 1. The number of molecules was varied between 500, 1,000, 2,000 and 3,000 and the number of features between 10, 60 and 100. Per parameter setting, 10 datasets were generated and runtimes and peak RAM usage were averaged over these repeats. Tests for univariate as well as bivariate patterns were run. No multithreading was used for any method. NE calculation with _SPIAT_ crashed when applied to 100 features, so it was only run for fewer features. Results are shown in \fref{fig:timings}. NE becomes very slow as th number of features increases, despite calculating the enrichment using SPIAT's _average_percentage_of_cells_within_radius_ function, which calls the _frNN_ function from the _dbscan_ package that relies on a custom C-function. 
+Timings and RAM usage on an Intel Core i5-11400H 2.70GHz processor were investigated for \smop, \emph{spicyR} and NE for increasing numbers of molecules and genes on synthetic point patterns. The point patterns were generated under CSR on a square area of 10 $\times$ 10, the neighbourhood size for NE was set at 1. The total number of molecules was varied between 500, 1,000, 2,000 and 3,000 and the number of features between 10, 60 and 100. Per parameter setting, 10 datasets were generated and runtimes and peak RAM usage were averaged over these repeats. Tests for univariate as well as bivariate patterns were run. No multithreading was used for any method (\smop and \spicy natively allow for multithreading, NE is easily adapted for it). NE calculation with _SPIAT_ crashed when applied to 100 features, so it was only run for fewer features. Results are shown in \fref{fig:timings}. NE becomes very slow as th number of features increases, despite calculating the enrichment using SPIAT's _average_percentage_of_cells_within_radius_ function, which calls the _frNN_ function from the _dbscan_ package that relies on a custom C-function. 
 
 ```{r timing}
 numRepeatsTime = 10
@@ -1910,8 +1911,6 @@ numPPPs = 12;Range = 1
 if(!file.exists(timingsFile <- "Results/timings.RData")){
     register(SerialParam())#Serial processing for timings
     timings = lapply(seq_len(nrow(GridTime)), function(j){
-        cat(j, "\t")
-        if(!file.exists(timFile <- paste0("Results/timings/", paste(GridTime[j,], collapse = "_"), ".RData"))){
             numPoints = GridTime[j, "numPoints"];numGenes = GridTime[j, "numGenes"]
             List = lapply(seq_len(numPPPs), function(i){
                 ppp = runifpoint(numPoints, win = owin(xrange = c(0, 10), yrange = c(0, 10)))
@@ -1972,15 +1971,13 @@ if(!file.exists(timingsFile <- "Results/timings.RData")){
          })}
          mat = rbind("spicy" = spicyRAM[2:4], "smoppix" = smoppixTime[2:4], 
                         "smoppix_fixed" = smoppixTimeFixed[2:4], "SPIAT" = spiatTime[2:4])
-            save(mat, file = timFile)
-        } else load(timFile)
         return(mat)
     })
     save(timings, file = timingsFile)
 } else load(timingsFile) 
 ```
 
-```{r boxplotTim, fig.cap = "Average timings in minutes and peak RAM usage in megabytes (MB) over 10 repeats for different methods for testing for aggregation and colocalization. smoppix_fixed indicates that fixed effets models rather than mixed effects models were used, to illustrate the major computational share of fitting the linear mixed models after the PIs have been estimated.\\label{fig:timings}", fig.width = 6, fig.height = 5}
+```{r boxplotTim, fig.cap = "Average timings in minutes and peak RAM usage in megabytes (MB) over 10 repeats for different methods for testing for aggregation and colocalization. smoppix_fixed indicates that fixed-effects models rather than mixed-effects models were used, to illustrate the major computational share of fitting the linear mixed models after the PIs have been estimated.\\label{fig:timings}", fig.width = 6, fig.height = 5}
 timingsMat = cbind(Reduce(timings, f = rbind), GridTime[rep(seq_len(nrow(GridTime)), each = 4),], "Method" = rep(c("spicyR", "smoppix", "smoppix_fixed", "NE"), length.out = nrow(GridTime)*4))
 timingsMat$Elapsed_Time_min = timingsMat$Elapsed_Time_sec/60 
 moltTimingsMat = melt(timingsMat, id.vars = c("Method", colnames(GridTime)), variable.name = "quantity")
@@ -2017,13 +2014,13 @@ anaTime = system.time({
 })
 ```
 
-The probabilistic index is defined as the evaluation of the distribution function under the null in the observed distances. In the main paper, we argued that the PI of the nearest-neighbour distances under the background null can be found exactly using the negative hypergeometric distribution. According to this distribution, the number of Bernoulli trials $x$ needed to reach $q$ successes when sampling without replacement from a set of $w = N-1$ units with $k = N_g-1$ has probability mass function \parencite{Miller2007}:
+The probabilistic index is defined as the evaluation of the distribution function under the null in the observed distances. In the main text, we argue that the PI of the nearest-neighbour distances under the background null can be found exactly using the negative hypergeometric distribution. According to this distribution, the number of attempts $x$ needed to reach $q$ successes when sampling without replacement from a set of $w = N-1$ units with $k = N_g-1$ successes has probability mass function \parencite{Miller2007}:
 
 \begin{equation}
 Pr(X=x) = \frac{\binom{x+q-1}{x}\binom{w-q-x}{k-x}}{\binom{w}{k}},
 \label{eq:hyperGeom}
 \end{equation}
-and distribution function $H(x) = Pr(X\leq x) = \sum_{k=0}^x Pr(X=k)$. Setting $q=1$, \eqref{eq:hyperGeom} assigns a probability to each distance $d_{(x)}$ of being the smallest among the set of $N_g-1$ included distances under the background null. In view of the definition of the PI in \eqref{eq:pi}, and the occurrence of ties, we define the following functions based on the set of all distances to a given molecule: 
+and distribution function $H(x) = Pr(X\leq x) = \sum_{k=0}^x Pr(X=k)$. Setting $q=1$, \eqref{eq:hyperGeom} assigns a probability to each distance $d_{(x)}$ (corresponding to the distance to $i$ with rank $x$) of being the smallest among the set of $N_g-1$ included distances under the background null. In view of the definition of the PI in equation \eqref{eq:pi} in the main text, and the occurrence of ties, we define the following functions based on the set of all distances to a given molecule: 
 
 \begin{equation}
 \begin{aligned}
@@ -2043,13 +2040,13 @@ Define $t_i = (N-1) F_{all}(d_{(i)})$ and $r_i = (N-1) R_{all}(d_{(i)})$. The PI
 \end{equation}
 without having to do permutations. The functions in \eqref{eq:funsNH} can be computation and memory intensive to obtain when the number of molecules is large, as $(N-1)$ distances need to be calculated per molecule $i$. In that case, approximations of $\tilde{F}_{all}$ and $\tilde{R}_{all}$ based on a random subset of $S$ out of $N-1$ distances are also sufficient. The approximate ranks $\tilde{r}_i = \round{S\tilde{R}_{all}(d_i)}$ and $\tilde{t}_i = \round{S\tilde{F}_{all}(d_i)}$, with $\round{.}$ meaning rounding to the nearest integer, are then plugged into \eqref{eq:piNhyp}. In the spirit of \textcite{Phipson2010}, who propose a correction to prevent permutation p-values from becoming exactly zero, all $\tilde{t}_i$'s equal to 0 are set to 1. $\tilde{t}_i=0$ can occur when the observed nearest-neighbour distance is excluded from $S$. Also when the null distribution and corresponding functions $R_{all}$ and $F_{all}$ are obtained from Monte-Carlo simulation under CSR, these approximate ranks can be used. 
 
-We confirm the exact enumeration of the PI null distribution using the negative hypergeometric distribution empirically using Monte-Carlo simulation. For a randomly drawn subset of size $`r a`$ out of a set of $`r n`$ distances, the distribution of the nearest-neighbour distance (i.e the smallest observation of the subset) is found through permutation, so taking 10,000 other samples of size $`r a`$ and finding their minimum. This is compared to our analytical solution using the negative hypergeometric distribution, as implemented in \smop. The resulting densities are similar (see \fref{fig:negHyp}), with the exact negative hypergeometric distribution being faster.
+We confirm the exact enumeration of the PI null distribution using the negative hypergeometric distribution empirically using Monte-Carlo simulation. For a randomly drawn subset of size $`r a`$ out of a set of $`r n`$ distances, the distribution of the nearest-neighbour distance (i.e the smallest observation of the subset) is found through permutation, so taking 100,000 other samples of size $`r a`$ and finding their minimum. This is compared to our analytical solution using the negative hypergeometric distribution, as implemented in \smop. The resulting densities are similar (see \fref{fig:negHyp}), with the exact negative hypergeometric distribution being faster.
 
 ```{r negHypPdf, fig.cap = "Densities of the nearest-neighbour distance approximated through 100,000 Monte-Carlo simulations (black) and using the analytical approach based on the negative hypergreometric distribution (blue). The computation times in seconds are shown in the legend.\\label{fig:negHyp}", fig.height = 4.5, fig.width = 5}
 plot(as.numeric(names(tabSim2)), c(tabSim2), type = "l", xlab = "Nearest-neighbour distance", ylab = "Density")
 lines(sd, anaDist, col = "blue")
 legend("topright", col = c("black", "blue"), lty = 1, 
-       legend = paste0(c("Monte-Carlo approximation", "Negative hypergeometric distribution"), " (", signif(c(mcTime[3], anaTime[3]),2), "s)"))
+       legend = paste0(c("Monte-Carlo\napproximation", "Negative hypergeometric\ndistribution"), " (", signif(c(mcTime[3], anaTime[3]),2), "s)"))
 ```
 
 \clearpage
@@ -2062,7 +2059,7 @@ The tests in \smop discussed in the main text are nonparametric, as they do not 
 L(\mb C|\lambda) = \exp\left(-\int \lambda(\mb C)d\mb C\right)\prod_{i=1}^N\lambda(\mb c_i),
 \label{eq:likpp}
 \end{equation}
-with $\lambda(\mb c_i)$ an intensity parameter. For a homogeneous Poisson process, the intensity is constant over space: $\lambda(\mb c_i) = \lambda$. If an region A can be delineated, a parametric approach to detecting departures from CSR is to replace the constant intensity $\lambda$ in \eqref{eq:likpp} by an intensity varying over space. We focus here on gradients as they are known to occur in tissues and cells \parencite{Ashe2006}. Allowing for differences in slope and direction of the gradient across point patterns, the intensity of such inhomogeneous Poisson process is modeled as:
+with $\lambda(\mb c_i)$ an intensity parameter. For a homogeneous Poisson process, the intensity is constant over space: $\lambda(\mb c_i) = \lambda$. If an region A can be delineated, a parametric approach to detecting departures from CSR is to replace the constant intensity $\lambda$ in \eqref{eq:likpp} by an intensity varying over space. We focus here on gradients as they are known to occur in tissues and cells \parencite{Ashe2006}. Allowing for differences in slope and direction of the gradient across point patterns, the intensity of such an inhomogeneous Poisson process is modeled as:
 
 \begin{equation}
 \log\left(\lambda(\mb c_i)\right) = \gamma + \sum_{t=1}^n\left[\alpha_t x_i + \beta_t y_i\right]I(\mb c_i \in A_t).
