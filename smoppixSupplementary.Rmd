@@ -273,7 +273,7 @@ hist(unlist(piDfNNpair), main = "Bivariate nearest-neighbour PI", xlab = "PI est
 par(mfrow = c(1,1))
 ```
 
-```{r wfnn, fig.cap = "Illustration of the weighting function for univariate nearest-neighbour distances on the Yang2023 \\textit{S. moellendorfii} root dataset.\\label{fig:nnwf}", fig.height = 3.8, fig.width = 5.5}
+```{r wfnn, fig.cap = "Illustration of the weighting function for univariate nearest-neighbour distances on the Yang2023 \\textit{S. moellendorfii} root dataset. The modelled weight (y-axis) is shown as a function of number of molecules (x-axis).\\label{fig:nnwf}", fig.height = 3.8, fig.width = 5.5}
 plotWf(distResYang, "nn")
 ```
 
@@ -470,7 +470,7 @@ The overlap between the results of \smop and \spicy \parencite{Canete2022} is sh
 ```{r spicy2, fig.height = 9, fig.cap = paste("Transcript pair", colSpicyR, "which is considered colocalized by \\spicy but not significant in the \\smop analysis.\\label{fig:yangSpicy2}")}
 plotExplore(hypYang, features = colSpicyR, ppps = which(sapply(hypYang$tabObs, function(x){
     all(x[sund(colSpicyR)]>0 & !is.na(x[sund(colSpicyR)]))
-})), Cex = 2, Cex.main = 0.7, numPps = numPPsYang)
+})), Cex = 2, Cex.main = 0.7, numPps = numPPsYang) 
 ```
 
 ```{r spiatYang}
@@ -526,7 +526,7 @@ plotExplore(hypYang, otherSignSpiat[1], Cex = 3, Cex.main = 0.7, numPps = numPps
 
 ### Confirmatory experiment with HCR RNA-FISH \label{sec:hcrfish}
 
-The results on smFISH data by \smop, \spicy, NE and the authors' original analysis for the eight genes chosen for HCR RNA-FISH confirmatory experiments for are shown in Table \ref{tab:canTable}. \spicy and the original analysis declare almost all gene pairs colocalized, whereas NE finds no significant results. \smop agrees with spicyR and the authors' analysis on colocalization of the pairs SmPINR–SmSGNa and SmPINS–SmSGNb (PI < 0.5 and adjusted p-value < 0.05), but declares the other pairs significantly antilocalized (PI > 0.5 and adjusted p < 0.05). The scatterplots of the smFISH experiment of the SmBIRDa--SmCYCD3;3a and SmPINR--SmSGNa are shown in \fref{fig:Yang} in the main text.
+The results on smFISH data by \smop, \spicy, NE and the authors' original analysis for the eight genes chosen for HCR RNA-FISH confirmatory experiments for are shown in Table \ref{tab:canTable}. \spicy and the original analysis declare almost all gene pairs colocalized, whereas NE finds no significant results. \smop agrees with spicyR and the authors' analysis on colocalization of the pairs SmPINR–SmSGNa and SmPINS–SmSGNb (PI < 0.5 and adjusted p-value < 0.05), but declares the other pairs significantly antilocalized (PI > 0.5 and adjusted p-value < 0.05). The scatterplots of the smFISH experiment of the SmBIRDa--SmCYCD3;3a and SmPINR--SmSGNa are shown in \fref{fig:Yang} in the main text.
 
 ```{r candidateshcrfish, results = "asis"}
 candidatesHCRfish = c("SmBIRDa--SmCYCD3;3a", "SmPINR--SmSGNa", "SmPINS--SmSGNb")
@@ -802,7 +802,9 @@ predLin = predict(fit, newdata = data.frame(samSizes = samPred <- c(1e1, 3e1, 1e
 predQuad = predict(fitComb, newdata = data.frame(combSizes = comSizeFun(samPred)))/3600
 ```
 
-We reanalysed a dataset by \textcite{Eng2019}, containing measurements of 10,000 genes in NIH/3T3 mouse fibroblast cells. Five z-slices with z-steps of 1 $\mu$m were taken across multiple fields of view (FOVs). To demonstrate robustness, the experiment was performed twice on separate sections (the experiment variable). The cells were gated by hand based on DAPI staining. Here we test for vicinity to and remoteness from cell wall and cell centroid and for within-cell aggregation for one gene at the time. The bivariate analysis was restricted to the 500 most highly expressed genes for computational reasons, an analysis on all 10,000 genes would take roughly 20,000 CPU hours. \emph{smoppix} found `r sum(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5)` genes significantly close to the cell edge and `r sum(EngRes$centroid[, "pAdj"] < sigLevel & EngRes$centroid[, "Estimate"] < 0.5)` genes significantly close to the centroid compared to CSR within the cell; the most significant ones in each case are shown in \fref{fig:Eng} in the main text. Also, \smop found `r sum(na.rm = TRUE, EngRes$nnCell[, "pAdj"] < sigLevel & EngRes$nnCell[, "Estimate"] < 0.5)` genes aggregated within the cell compared to CSR (see \fref{fig:aggCell}). gene pairs were found to be colocalized within the cell compared to CSR (see \fref{fig:colCell}) FINISH THIS
+We reanalysed a dataset by \textcite{Eng2019}, containing measurements of 10,000 genes in NIH/3T3 mouse fibroblast cells. Five z-slices with z-steps of 1 $\mu$m were taken across multiple fields of view (FOVs). To demonstrate robustness, the experiment was performed twice on separate sections (the experiment variable). The cells were gated by hand based on DAPI staining. Here we test for vicinity to and remoteness from cell wall and cell centroid and for within-cell aggregation for one gene at the time. \emph{smoppix} found `r sum(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5)` genes significantly close to the cell edge and `r sum(EngRes$centroid[, "pAdj"] < sigLevel & EngRes$centroid[, "Estimate"] < 0.5)` genes significantly close to the centroid compared to CSR within the cell; the most significant ones in each case are shown in \fref{fig:Eng} in the main text. Also, \smop found `r sum(na.rm = TRUE, EngRes$nnCell[, "pAdj"] < sigLevel & EngRes$nnCell[, "Estimate"] < 0.5)` genes aggregated within the cell compared to CSR (see \fref{fig:aggCell}). 
+<!-- The bivariate analysis was restricted to the 500 most highly expressed genes for computational reasons, an analysis on all 10,000 genes would take roughly 20,000 CPU hours. -->
+<!-- gene pairs were found to be colocalized within the cell compared to CSR (see \fref{fig:colCell}) FINISH THIS -->
 
 ```{r centroidCell, include = FALSE}
 numCellsEng = 30L
@@ -821,7 +823,7 @@ plotTopResults(hypEng, EngListOvLmms, pi = "nnPairCell", nCells = numCellsEng, w
 
 ### Authors' findings
 
-The spatial analysis in the original publication was based on pseudosegmentation into squares of 10 by 10 pixels, calculation of Pearson correlation on the resulting counts and hierarchical clustering. Three main clusters were thus identified: nuclear/perinuclear, cytoplasm and protrusions. An alternative analysis exploiting the full resolution of the data using latent factors was presented by \parencite{Walter2023}, finding similar clusters of genes. There is some overlap between genes found close to the centroid by \smop and in the nuclear/perinuclear region by the authors, and genes found close to the edge by \smop and in protrusions by the authors, respectively (\fref{fig:vennOverallFibro}). Yet there are also differences, e.g. genes found close to the centroid by \smop but not in the nuclear/perinuclear region by the original analysis (\fref{fig:smoppixCentroid}) or genes found enriched in the protrusions by the authors but not found close to the edge by \smop (\fref{fig:authorsProtrusions}). The latter tend to be lowly expressed genes, which may explain why \smop does not find sufficient evidence to call spatial patterning. And of course, enrichment in protrusions not exactly the same as vicinity to cell edge, and the nucleus and the centroid of the cell may not colocalize. Also, the authors' analysis looks for clusters of genes with similar spatial distribution, whereas \smop tests every gene independently.
+The spatial analysis in the original publication was based on pseudosegmentation into squares of 10 by 10 pixels, calculation of Pearson correlation on the resulting counts and hierarchical clustering. Three main clusters were discovered and visually identified as nuclear/perinuclear, cytoplasm and protrusions. An alternative analysis exploiting the full resolution of the data using latent factors was presented by \parencite{Walter2023}, finding similar clusters of genes. There is some overlap between genes found close to the centroid by \smop and in the nuclear/perinuclear region by the authors, and genes found close to the edge by \smop and in protrusions by the authors, respectively (\fref{fig:vennOverallFibro}). Yet there are also differences, e.g. genes found close to the centroid by \smop but not in the nuclear/perinuclear region by the original analysis (\fref{fig:smoppixCentroid}) or genes found enriched in the protrusions by the authors but not found close to the edge by \smop (\fref{fig:authorsProtrusions}). The latter tend to be lowly expressed genes, which may explain why \smop does not find sufficient evidence to call spatial patterning. And of course, enrichment in protrusions is not exactly the same as vicinity to cell edge, and the nucleus and the centroid of the cell may not colocalize. Also, the authors' analysis looks for clusters of genes with similar spatial distribution, whereas \smop tests every gene independently.
 
 ```{r authorFindings}
 #See Eng2019, extended data figure 3
@@ -847,7 +849,7 @@ onlyProtrusions = setdiff(protrusMat[, "gene"], smoppixEdge)
 plotCells(hypEng, onlyProtrusions[1:3], Cex = 2.25, nCells = numCellsEng, warnPosition = FALSE)
 ```
 
-```{r vennEngFibroblasts, fig.width = 11, fig.height = 6.9, fig.cap = "Venn diagram of overlap between results from the authors and from \\smop.\\label{fig:vennOverallFibro}"}
+```{r vennEngFibroblasts, fig.width = 11, fig.height = 7.2, fig.cap = "Venn diagram of overlap between results from the authors and from \\smop.\\label{fig:vennOverallFibro}"}
 par(mar = c(4.75,5.3,1,1))
 venn(list("Close to\nedge smoppix" = smoppixEdge, "Protrusions\nauthors" = protrusMat[, "gene"], "Close to\ncentroid smoppix" = smoppixcentroid,  "Nuclear/perinuclear\nauthors" = nucMat[, "gene"], "Cytoplasm\nauthors" = cytoMat[, "gene"]))
 ```
@@ -1122,7 +1124,7 @@ par(mfrow = c(1,1))
 
 The overlap of findings of the univariate methods between \smop and \spicy is shown in \fref{fig:vennSpicyDar}; NE could not be applied to this dataset for computational reasons. \spicy's most significant findings are plotted in Figures \ref{fig:aggSpicy}-\ref{fig:regSpicy}.
 
-```{r vennSpicy, fig.height = 5.7, fig.cap = "Venn diagram of overlap between \\smop and \\spicy results for univariate analysis.\\label{fig:vennSpicyDar}"}
+```{r vennSpicy, fig.height = 6.7, fig.cap = "Venn diagram of overlap between \\smop and \\spicy results for univariate analysis.\\label{fig:vennSpicyDar}"}
 AggMatSpicy = cbind(AggMatSpicy, "pAdj_Intercept"= p.adjust(AggMatSpicy[, "spicy_Intercept_pVal"], method = "BH"),
                     "pAdj_time"= p.adjust(AggMatSpicy[, "spicy_time10h_pVal"], method = "BH"))
 vennSpicy = venn(list("spicyR\naggregated" = rownames(AggMatSpicy)[AggMatSpicy[, "pAdj_Intercept"] < sigLevel & AggMatSpicy[, "spicy_Intercept"] > 0],
@@ -1140,13 +1142,13 @@ plotExplore(hypDarSub, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercep
 plotExplore(hypDarSub, Nrow = 3, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercept"] < 0, "spicy_Intercept_pVal"])))
 ```
 
-```{r diffSpicy2, fig.cap = "Gene found aggregated by \\spicy but regularly spaced by \\smop\\label{fig:diffSpicy2}", fig.height = 7}
+```{r diffSpicy2, fig.cap = "Gene found aggregated by \\spicy but regularly spaced by \\smop.\\label{fig:diffSpicy2}", fig.height = 7}
 plotExplore(hypDarSub,Nrow = 3,  rownames(DarRes$nn[diff22, "pAdj", drop = FALSE])[1], Cex = 0.8)
 ```
 
 `r length(diff22)` genes were found to be aggregated by \spicy but regularly spaced according to smoppix, one example is shown in \fref{fig:diffSpicy2}. These results also reflect the difference in the null hypothesis tested. \spicy considers only the densities of the genes themselves for estimating a baseline, whereas \smop considers the background of all other molecules as null. The Venn diagram for the bivariate analysis is shown in \fref{fig:vennSpicyBi}, with \spicy finding a lot of colocalization (see Figures \ref{fig:spicyColoc} and \ref{fig:spicyAntiloc} for most significant results), and smoppix more antilocalization. The gene found most significantly antilocalized by smoppix among the ones found colocalized by \spicy is shown in Figure \ref{fig:spicyDiffAntiloc}; especially at time 10h there are indeed regions with only one of both genes expressed.
 
-```{r vennSpicyColoc, fig.height = 5.7, fig.cap = "Venn diagram of overlap between \\smop and \\spicy results for bivariate analysis.\\label{fig:vennSpicyBi}"}
+```{r vennSpicyColoc, fig.height = 6.7, fig.cap = "Venn diagram of overlap between \\smop and \\spicy results for bivariate analysis.\\label{fig:vennSpicyBi}"}
 ColocMatSpicy = cbind(ColocMatSpicy, "pAdj_Intercept"= p.adjust(ColocMatSpicy[, "spicy_Intercept_pVal"], method = "BH"),
                     "pAdj_time"= p.adjust(ColocMatSpicy[, "spicy_time10h_pVal"], method = "BH"))
 vennSpicyColoc = venn(list("spicyR\ncolocalized" = rownames(ColocMatSpicy)[ColocMatSpicy[, "pAdj_Intercept"] < sigLevel & ColocMatSpicy[, "spicy_Intercept"] > 0],
@@ -1785,7 +1787,7 @@ ggplot(data = pisSubMoltEngCell, aes(x = Proportion, y = Estimate, group = fe, c
     xlab("Subsampling proportion") + ylab("Probabilistic index")
 ```
 
-```{r subsamspicyPlot, fig.cap = paste0("Estimated univariate u-statistic (y-axis) of the", numPlotSubSam, " most highly expressed genes (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUUni}"), fig.height = 5}
+```{r subsamspicyPlot, fig.cap = paste0("Estimated univariate \\spicy u-statistic (y-axis) of the ", numPlotSubSam, " most highly expressed genes (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUUni}"), fig.height = 5}
 USub = lapply(subSamListYangSpicy, function(x){
     rbind(Reduce(f = rbind, lapply(mostExprFeat, function(i){
             data.frame("Estimate" = x$pairwiseAssoc[[paste0(i, "__", i)]],
@@ -1807,7 +1809,7 @@ ggplot(data = uSubMoltAgg[uSubMoltAgg$uStatistic == "univariate"  & uSubMoltAgg$
     geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Univariate U-statistic")
 ```
 
-```{r subsamspicyPlotBi, fig.cap = paste0("Estimated bivariate u-statistic (y-axis) of the ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUBi}"), fig.height = 5}
+```{r subsamspicyPlotBi, fig.cap = paste0("Estimated bivariate \\spicy u-statistic (y-axis) of the ", numPlotSubSam, " selected gene pairs (rows) as a function of subsampling proportion (x-axis) for the \\emph{S. moellendorfii} root data by \\textcite{Yang2023}, averaged over sections. Separate lines are drawn per root (colours).\\label{fig:subSamUBi}"), fig.height = 5}
 uSubMoltAgg$gene = gsub("--", "-", uSubMoltAgg$gene)
 ggplot(data = uSubMoltAgg[uSubMoltAgg$uStatistic == "bivariate"  & uSubMoltAgg$gene %in% gsub("--", "-", mostExprPairs[seq_len(numPlotSubSam)]),], aes(x = Proportion, y = Estimate, group = dr, col = dr)) +
     geom_line() + facet_grid(gene~., scales = "free_y") +  theme(strip.text = element_text(size = stripTextSizeSubsam)) + scale_color_discrete(name = "Day and root") + xlab("Subsampling proportion")  + ylab("Bivariate U-statistic")
@@ -1903,7 +1905,7 @@ print.xtable(comment = FALSE, xtable(subMat, align = "|r|lr|r|r|", display = c("
 
 ## Time and memory benchmark \label{sec:timing}
 
-Timings and RAM usage on an Intel Core i5-11400H 2.70GHz processor were investigated for \smop, \emph{spicyR} and NE for increasing numbers of molecules and genes on synthetic point patterns. The point patterns were generated under CSR on a square area of 10 $\times$ 10, the neighbourhood size for NE was set at 1. The total number of molecules was varied between 500, 1,000, 2,000 and 3,000 and the number of features between 10, 60 and 100. Per parameter setting, 10 datasets were generated and runtimes and peak RAM usage were averaged over these repeats. Tests for univariate as well as bivariate patterns were run. No multithreading was used for any method (\smop and \spicy natively allow for multithreading, NE is easily adapted for it). NE calculation with _SPIAT_ crashed when applied to 100 features, so it was only run for fewer features. Results are shown in \fref{fig:timings}. NE becomes very slow as th number of features increases, despite calculating the enrichment using SPIAT's _average_percentage_of_cells_within_radius_ function, which calls the _frNN_ function from the _dbscan_ package that relies on a custom C-function. 
+Timings and RAM usage on an Intel Core i5-11400H 2.70GHz processor were investigated for \smop, \emph{spicyR} and NE for increasing numbers of molecules and genes on synthetic point patterns. The point patterns were generated under CSR on a square area of 10 $\times$ 10, the neighbourhood size for NE was set at 1. The total number of molecules was varied between 500, 1,000, 2,000 and 3,000 and the number of features between 10, 60 and 100. 12 point patterns were generated per repeat, in the analysis one fixed effect and one random effect were included. Per parameter setting, 10 datasets were generated and runtimes and peak RAM usage were averaged over these repeats. Tests for univariate as well as bivariate patterns were run. No multithreading was used for any method (\smop and \spicy natively allow for multithreading, NE is easily adapted for it). NE calculation with _SPIAT_ crashed when applied to 100 features, so it was only run for fewer features. Results are shown in \fref{fig:timings}. NE becomes very slow as th number of features increases, despite calculating the enrichment using SPIAT's _average_percentage_of_cells_within_radius_ function, which calls the _frNN_ function from the _dbscan_ package that relies on a custom C-function. 
 
 ```{r timing}
 numRepeatsTime = 10
@@ -2024,7 +2026,7 @@ The probabilistic index is defined as the evaluation of the distribution functio
 Pr(X=x) = \frac{\binom{x+q-1}{x}\binom{w-q-x}{k-x}}{\binom{w}{k}},
 \label{eq:hyperGeom}
 \end{equation}
-and distribution function $H(x) = Pr(X\leq x) = \sum_{k=0}^x Pr(X=k)$. Setting $q=1$, \eqref{eq:hyperGeom} assigns a probability to each distance $d_{(x)}$ (corresponding to the distance to $i$ with rank $x$) of being the smallest among the set of $N_g-1$ included distances under the background null. In view of the definition of the PI in equation \eqref{eq:pi} in the main text, and the occurrence of ties, we define the following functions based on the set of all distances to a given molecule: 
+and distribution function $H(x) = Pr(X\leq x) = \sum_{k=0}^x Pr(X=k)$. Setting $q=1$, \eqref{eq:hyperGeom} assigns a probability to each distance $d_{(x)}$ (corresponding to the distance with rank $x$) of being the smallest among the set of $N_g-1$ included distances under the background null. In view of the definition of the PI in equation \eqref{eq:pi} in the main text, and the occurrence of ties, we define the following functions based on the set of all distances to a given molecule: 
 
 \begin{equation}
 \begin{aligned}
@@ -2042,7 +2044,7 @@ Define $t_i = (N-1) F_{all}(d_{(i)})$ and $r_i = (N-1) R_{all}(d_{(i)})$. The PI
 \end{aligned}
 \label{eq:piNhyp}
 \end{equation}
-without having to do permutations. The functions in \eqref{eq:funsNH} can be computation and memory intensive to obtain when the number of molecules is large, as $(N-1)$ distances need to be calculated per molecule $i$. In that case, approximations of $\tilde{F}_{all}$ and $\tilde{R}_{all}$ based on a random subset of $S$ out of $N-1$ distances are also sufficient, given that the distribution of all intermolecule distances is independent of molecule density. The approximate ranks $\tilde{r}_i = \round{S\tilde{R}_{all}(d_i)}$ and $\tilde{t}_i = \round{S\tilde{F}_{all}(d_i)}$, with $\round{.}$ meaning rounding to the nearest integer, are then plugged into \eqref{eq:piNhyp}. In the spirit of \textcite{Phipson2010}, who propose a correction to prevent permutation p-values from becoming exactly zero, all $\tilde{t}_i$'s equal to 0 are set to 1. $\tilde{t}_i=0$ can occur when the observed nearest-neighbour distance is excluded from $S$. Also when the null distribution and corresponding functions $R_{all}$ and $F_{all}$ are obtained from Monte-Carlo simulation under CSR, these approximate ranks can be used. 
+without having to do permutations. The functions in \eqref{eq:funsNH} can be computation and memory intensive to obtain when the number of molecules is large, as $N-1$ distances need to be calculated per molecule $i$. In that case, approximations of $\tilde{F}_{all}$ and $\tilde{R}_{all}$ based on a random subset of $S$ out of $N-1$ distances are also sufficient, since the distribution of all intermolecule distances is independent of molecule density. The approximate ranks $\tilde{r}_i = \round{S\tilde{R}_{all}(d_i)}$ and $\tilde{t}_i = \round{S\tilde{F}_{all}(d_i)}$, with $\round{.}$ meaning rounding to the nearest integer, are then plugged into \eqref{eq:piNhyp}. In the spirit of \textcite{Phipson2010}, who propose a correction to prevent permutation p-values from becoming exactly zero, all $\tilde{t}_i$'s equal to 0 are set to 1. $\tilde{t}_i=0$ can occur when the observed nearest-neighbour distance is excluded from $S$. Also when the null distribution and corresponding functions $R_{all}$ and $F_{all}$ are obtained from Monte-Carlo simulation under CSR, these approximate ranks can be used. 
 
 We confirm the exact enumeration of the PI null distribution using the negative hypergeometric distribution empirically using Monte-Carlo simulation. For a randomly drawn subset of size $`r a`$ out of a set of $`r n`$ distances, the distribution of the nearest-neighbour distance (i.e the smallest observation of the subset) is found through permutation, so taking 100,000 other samples of size $`r a`$ and finding their minimum. This is compared to our analytical solution using the negative hypergeometric distribution, as implemented in \smop. The resulting densities are similar (see \fref{fig:negHyp}), with the exact negative hypergeometric distribution being faster.
 
@@ -2073,7 +2075,7 @@ The slopes $\alpha_t$ and $\beta_t$ are thus allowed to vary across point patter
 
 ## A note on compositionality \label{sec:comp}
 
-Methods testing for colocalization with respect to the background distribution, such as \smop and other methods that use feature label permutation, but also neighbourhood enrichment methods, are sensitive to compositional effects. A single feature can have a strong impact on the background distribution when it is highly abundant or when the number of features $p$ is low. For instance, when the molecules of one feature $j$ are highly aggregated and this strongly affects the background null distribution, another feature $k$ may be found to be regular. Yet when feature $j$ is omitted from the analysis, $k$ would have an average distance distribution and no longer be significant. This compositional effect is strongest in low-dimensional settings but fades as the number of features increases because then the influence of a single feature on the background distribution wanes \parencite{Hawinkel2020c}, which is why we observed it in the cell type localization dataset but less in the spatial transcriptomics data. Hence when the number of features is low, we recommend to always test for univariate localization patterns first, and interpret the bivariate patterns in their light. Methods testing for localization patterns departing from CSR are insensitive to compositional effects.
+Methods testing for colocalization with respect to the background distribution, such as \smop and other methods that use feature label permutation, but also neighbourhood enrichment methods, are sensitive to compositional effects. A single feature can have a strong impact on the background distribution when it is highly abundant or when the number of features $p$ is low. For instance, when the molecules of one feature $j$ are highly aggregated and this strongly affects the background null distribution, another feature $k$ may be found to be regular. Yet when feature $j$ is omitted from the analysis, $k$ would have an average distance distribution and no longer be significant. This compositional effect is strongest in low-dimensional settings but fades as the number of features increases because then the influence of a single feature on the background distribution wanes \parencite{Hawinkel2020c}, which is why we observed it in the cell type localization dataset but less in the spatial transcriptomics data. Hence when the number of features is low or some feature are highly abundant, we recommend to always test for univariate localization patterns first, and interpret the bivariate patterns in their light. Methods testing for localization patterns departing from CSR are insensitive to compositional effects.
 
 # Software versions
 
@@ -2219,7 +2221,7 @@ legend("topright", lty = c("dashed", "dotted", "solid"),
        legend = c("CSR", paste("Aggregated: PI =", signif(PIagg, 2)), paste("Regular: PI =", signif(PIreg, 2))), 
       cex = CexLeg+.05)
 par(mfrow = c(1,1))
-dev.off()
+dev.off() 
 ```
 
 ```{r kfun, include = FALSE}
