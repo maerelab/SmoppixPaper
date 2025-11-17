@@ -18,7 +18,7 @@ knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE,
                       purl = TRUE, fig.show = "hold", fig.pos = "p")
 libs = c("ggplot2", "BiocParallel", "reshape2", "grid", "psych", "spatstat", "xtable",
          "gplots", "openxlsx", "SpatialExperiment", "glmnet", "SPIAT", "png", "tiff",
-         "lmerTest", "spicyR", "smoppix", "parallel", "peakRAM", "extraDistr", "funkycells", "dbscan", "RCurl", "igraph", "ggraph")
+         "lmerTest", "spicyR", "smoppix", "parallel", "peakRAM", "extraDistr", "funkycells", "dbscan", "RCurl", "igraph", "ggraph", "PRROC")
 for (i in libs){
   library(i, character.only = TRUE, quietly = TRUE)
 };rm(i, libs)
@@ -958,7 +958,7 @@ print.xtable(comment = FALSE, xtable(subMat, align = "|r|lr|r|r|", display = c("
 
 \hl{Next we compare the performance of \smop, \spicy and NE in a parametric simulation study, which allows us to evaluate type I error and false discovery rate (FDR) control, as well as sensitivity. We simulate data from a number of point processes implemented in the \textit{spatstat} suite of packages \parencite{Baddeley2015}. The parameters of the simulations are estimated from the \textit{Selaginella} dataset by \textcite{Yang2023} as follows. Densities of the point clouds of all molecules are estimated for every image using the \textit{density.ppp} function in the \textit{spatstat.explore} R-package, which reflect the root shapes (see \fref{fig:densEstsYang}).}
 
-```{r convexHulls, fig.cap = "Density estimates of the point clouds of the data by \\textcite{Yang2023}. Day, section and root are shown in the plot titles. The 25 point patterns with most molecules are shown.\\label{fig:densEstsYang}", fig.height=5}
+```{r convexHulls, fig.cap = "Density estimates of the point clouds of the data by \\textcite{Yang2023}. Day, section and root are shown in the plot titles. The 20 point patterns with most molecules are shown.\\label{fig:densEstsYang}", fig.height=5}
 DensEstsYang = lapply(hypYang$ppp, density)
 numPoints = sapply(hypYang$ppp, npoints)
 par(mfrow = mmm <- c(4, 5), mar = c(.5,2,1,2))
@@ -996,7 +996,7 @@ multMatern = 10
 \end{aligned}
 \end{equation}
 
-\hl{If no features are declared significant, the FDP is set to 0. The average measures over the 200 simulation runs are shown in \fref{fig:parSimsUni}. We observe that \smop controls the type I error rate in all scenarios, NE is slightly liberal whereas \spicy has highly inflated type I error rate, as in the feature label permutations above. \smop also mostly controls the false discovery rate (FDR, the average FDP over repeated simulations), NE has slightly inflated FDR, whereas \spicy suffers from highly inflated FDR. These results notwithstanding, \smop also achieves the highest sensitivity in most scenarios.}
+\hl{If no features are declared significant, the FDP is set to 0. The false discovery rate (FDR) is approximated as the average FDP over repeated simulations. Boxplots of the results over the 200 simulation runs are shown in \fref{fig:parSimsUni}, precision-recall curves in \fref{fig:parSimsUniPR}. We observe that \smop controls the type I error rate in all scenarios, NE is slightly liberal whereas \spicy has highly inflated type I error rate, as in the feature label permutations above. \smop also mostly controls the FDR, NE has slightly inflated FDR, whereas \spicy suffers from highly inflated FDR. These results notwithstanding, \smop also achieves the highest sensitivity in most scenarios, also reflected in having the highest precision-recall curve (\fref{fig:parSimsUniPR}).}
 
 ```{r parSimsVis, fig.cap = "Illustration of different point processes (titles) used in parametric simulation for univariate aggregation test.\\label{fig:illustrParamUni}", fig.height = 5.5}
 shrunkWindows = lapply(hypYang$ppp, function(x) erosion(x$window, 20))
@@ -1081,7 +1081,7 @@ if(!file.exists(parSimsFileUni <- "Results/parSimsUni.RData")){
 } else load(parSimsFileUni)
 ```
 
-```{r parSimsana, fig.cap = "\\hl{Different performance measures (rows) for analysis methods (colour) and spatial patterns (columns) considered. The dotted line indicates the significance level of 0.05. FDP: false discovery proportion.}\\label{fig:parSimsUni}", fig.height=4, fig.width=7.2}
+```{r parSimsana, fig.cap = "\\hl{Boxplots of different performance measures (rows) for analysis methods (colour) and spatial patterns (columns) considered. The dotted line indicates the significance level of 0.05, diamonds indicate means. FDP: false discovery proportion.}\\label{fig:parSimsUni}", fig.height=4.2, fig.width=7.8}
 parSimsMats = lapply(parSims, function(x){
     x$spicyR = unlist(x$spicyR)
     names(x$spicyR) = sapply(strsplit(names(x$spicyR), "__"), function(yy) yy[1])
@@ -1108,9 +1108,16 @@ parSimsRes = lapply(seq_len(nrow(parGrid)), function(i){
     fdr = FP/(TP+FP)
     fdr[FP==0 & TP==0] = 0
     fdr[is.na(fdr)] = 1
-    rbind(typeIerror, fdr, sens)
+    #PR curve
+    prCur = cbind("rep" = i, Reduce(f = rbind, lapply(colnames(pAdjMat), function(x) {
+        curve = pr.curve(-pAdjMat[altId, x], -pAdjMat[!altId, x], curve = TRUE)$curve[, 1:2]
+        colnames(curve) = c("Recall", "Precision")
+        tmp = data.frame(curve, "Method" = x)
+        tmp
+    })))
+    list("res" = rbind(typeIerror, fdr, sens), "prCurve" = prCur)
 })
-parSimsResMolt = melt(parSimsRes)
+parSimsResMolt = melt(lapply(parSimsRes, function(x) x$res))
 coloursSims = c("smoppix" = "orange", "spicyR" = "cornflowerblue", "NE" = "darkgreen")
 colnames(parSimsResMolt) = c("PerformanceMeasure", "Method", "value", "replicate")
 PerformanceMeasures = c("typeIerror", "fdr", "sens")
@@ -1118,16 +1125,30 @@ PerformanceMeasuresLabels = c("Type I error", "FDP", "Sensitivity")
 parSimsResMolt = cbind(parSimsResMolt, parGrid[parSimsResMolt[, "replicate"],])
 parSimsResMolt$pattern = factor(parSimsResMolt$pattern, levels = altScenarios, 
                                 labels = altScenarios, ordered = TRUE)
+parSimsResMolt$PerformanceMeasure = factor(parSimsResMolt$PerformanceMeasure, levels = PerformanceMeasures, labels = PerformanceMeasuresLabels, ordered = TRUE)
 hlineDf = data.frame("PerformanceMeasure" = c("typeIerror", "fdr"), yintercept = sigLevel)
 hlineDf$PerformanceMeasure = factor(hlineDf$PerformanceMeasure, levels = PerformanceMeasures, 
                                 labels = PerformanceMeasuresLabels, ordered = TRUE)
-parSimsResMolt$PerformanceMeasure = factor(parSimsResMolt$PerformanceMeasure, levels = PerformanceMeasures, labels = PerformanceMeasuresLabels, ordered = TRUE)
 parSimsResMoltAv = aggregate(parSimsResMolt, value ~ PerformanceMeasure + Method + pattern, FUN = mean)
-ggplot(data = parSimsResMoltAv, aes(y = value, x = pattern, col = Method)) + geom_point() +
-    facet_grid(PerformanceMeasure ~ .) + 
-    ylab("Performance measure") + xlab("Point process") +
+ggplot(data = parSimsResMolt, aes(y = value, x = Method, col = Method)) + geom_boxplot() +
+    facet_grid(PerformanceMeasure ~ pattern) + 
+    ylab("Performance measure") + xlab("") +
     scale_colour_manual(values = coloursSims) + 
-    geom_hline(data = hlineDf, aes(yintercept = yintercept), linetype = "dotted")
+    geom_point(data = parSimsResMoltAv, shape = 5) +
+    geom_hline(data = hlineDf, aes(yintercept = yintercept), linetype = "dotted") +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+
+```{r prCurvesUni, fig.cap = "\\hl{Precision-recall curves smoothed over all 200 replicates with confidence bands in grey for different analysis methods (colour) and spatial patterns (columns) considered for univariate association measures.}\\label{fig:parSimsUniPR}", fig.height=3.5, fig.width=7.8}
+parSimsResMoltCurve = Reduce(f = rbind, lapply(parSimsRes, function(x) x$prCurve))
+parSimsResMoltCurve = cbind(parSimsResMoltCurve[, -1], parGrid[parSimsResMoltCurve[, "rep"],])
+parSimsResMoltCurve$pattern = factor(parSimsResMoltCurve$pattern, levels = altScenarios, 
+                                labels = altScenarios, ordered = TRUE)
+ggplot(data = parSimsResMoltCurve[parSimsResMoltCurve$pattern != "Poisson",], aes(x = Recall, y = Precision, col = Method)) + 
+    geom_smooth(na.rm = TRUE, method = "loess") +
+    facet_grid(. ~ pattern) + 
+    scale_colour_manual(values = coloursSims) +
+    theme(axis.text.x = element_text(size = 4))
 ```
 
 ### Bivariate patterns
@@ -1139,7 +1160,7 @@ LambdaBi = 0.25
 gpRangeScaleBi = 0.002
 ```
 
-\hl{For bivariate tests, points are generated for the null features from the same inhomogeneous Poisson point processes. As alternative scenario, the same cluster processes as before (\textit{rCauchy}, \textit{rMatClust} and \textit{rThomas}) are used, whereby the "parent" events are assigned to one feature, and the "offspring" points around them to another, with the overall density scaled by the sum of the relative expression of the parent and offspring genes. The $\mu$ parameter was now fixed at `r LambdaBi`, the $scale$ was equal to `r gpRangeScaleBi` times the longest dimension of the window. These point processes are illustrated in \fref{fig:illustrParamBi}. Bivariate tests for association are applied using \smop and \spicy, NE was computationally too demanding for these bivariate simulations. The same performance measures as for the univariate case are used. Only the `r numFeatsBi` most expressed genes are included in the simulations to allow the \spicy method to be calculated. The second least expressed gene among those genes is assigned to the parent points, the least expressed to the offspring points, meaning there is only a single feature pair for which the null hypothesis is false. The results are shown in \fref{fig:parSimsBi} and reveal good type I error rate and FDR control for \smop and reasonable sensitivity. \spicy has excessive type I error rate and FDR.}
+\hl{For bivariate tests, points are generated for the null features from the same inhomogeneous Poisson point processes. As alternative scenario, the same cluster processes as before (\textit{rCauchy}, \textit{rMatClust} and \textit{rThomas}) are used, whereby the "parent" events are assigned to one feature, and the "offspring" points around them to another, with the overall density scaled by the sum of the relative expression of the parent and offspring genes. The $\mu$ parameter was now fixed at `r LambdaBi`, the $scale$ was equal to `r gpRangeScaleBi` times the longest dimension of the window. These point processes are illustrated in \fref{fig:illustrParamBi}. Bivariate tests for association are applied using \smop and \spicy, NE was computationally too demanding for these bivariate simulations. The same performance measures as for the univariate case are used. Only the `r numFeatsBi` most expressed genes are included in the simulations to allow the \spicy method to be calculated. The second least expressed gene among those genes is assigned to the parent points, the least expressed to the offspring points, meaning there is only a single feature pair for which the null hypothesis is false. The results are shown in \fref{fig:parSimsBi} and \fref{fig:parSimsBiPR} and reveal good type I error rate and FDR control for \smop and reasonable sensitivity. \spicy has excessive type I error rate and FDR, also resulting in low precision-recall curves.}
 
 ```{r parSimsVisBi, fig.cap = "Illustration of different point processes (titles) used in parametric simulation for bivariate aggregation test. Parent points are shown in blue, offspring points in red.\\label{fig:illustrParamBi}", fig.height = 3.2}
 clusAltScenarios <- selfName(paste(c("Cauchy", "MaternCluster", "Thomas"), "bi", sep = "_"))
@@ -1239,7 +1260,7 @@ parSimsBi = mclapply(seq_len(nrow(parGridBi)), mc.cores = nCores, function(i){
 } else load(parSimsFileBi)
 ```
 
-```{r processBi, fig.cap = "\\hl{Different performance measures (rows) for analysis methods (colour) and spatial patterns (x-axis) considered in the parametric simulation study for detecting bivariate associations. Averages over 200 simulations are shown. The dotted line indicates the significance level of 0.05. FDP: false discovery proportion.}\\label{fig:parSimsBi}", fig.height=4, fig.width=6.2}
+```{r processBi, fig.cap = "\\hl{Boxplots of different performance measures (rows) for analysis methods (colour) and spatial patterns (columns) considered in the parametric simulation study for detecting bivariate associations. The dotted line indicates the significance level of 0.05, diamonds indicate means. FDP: false discovery proportion.}\\label{fig:parSimsBi}", fig.height=3.5, fig.width=6.2}
 parSimsMatsBi = lapply(parSimsBi, function(x){
     if(is.null(x))
         return(NULL)
@@ -1271,10 +1292,17 @@ parSimsResBi = lapply(idBi <- which(sapply(parSimsBi, is.list)), function(i){
     fdr = FP/(TP+FP)
     fdr[FP==0 & TP==0] = 0
     fdr[is.na(fdr)] = 1
-    rbind(typeIerror, fdr, sens)
+        #PR curve
+    prCur = cbind("rep" = i, Reduce(f = rbind, lapply(colnames(pAdjMat), function(x) {
+        curve = pr.curve(-pAdjMat[altId, x], -pAdjMat[!altId, x], curve = TRUE)$curve[, 1:2]
+        colnames(curve) = c("Recall", "Precision")
+        tmp = data.frame(curve, "Method" = x)
+        tmp
+    })))
+    list("res" = rbind(typeIerror, fdr, sens), "prCurve" = prCur)
 })
 names(parSimsResBi) = idBi
-parSimsResMoltBi = melt(parSimsResBi)
+parSimsResMoltBi = melt(lapply(parSimsResBi, function(x) x$res))
 colnames(parSimsResMoltBi) = c("PerformanceMeasure", "Method", "value", "replicate")
 parSimsResMoltBi = cbind(parSimsResMoltBi, parGridBi[as.integer(parSimsResMoltBi[, "replicate"]),])
 parSimsResMoltBi$pattern = factor(parSimsResMoltBi$pattern, levels = allAltScen, 
@@ -1282,11 +1310,25 @@ parSimsResMoltBi$pattern = factor(parSimsResMoltBi$pattern, levels = allAltScen,
 parSimsResMoltBi$PerformanceMeasure = factor(parSimsResMoltBi$PerformanceMeasure, levels = PerformanceMeasures, labels = PerformanceMeasuresLabels, ordered = TRUE)
 parSimsResMoltAvBi = aggregate(parSimsResMoltBi, FUN = mean, 
                                value ~ PerformanceMeasure + Method + pattern)
-ggplot(data = parSimsResMoltAvBi, aes(y = value, x = pattern, col = Method)) +
-    facet_grid(PerformanceMeasure ~ .) + 
-    geom_point() + scale_colour_manual(values = coloursSims) + 
-    xlab("Point process") +ylab("Performance measure") +
-    geom_hline(data = hlineDf, aes(yintercept = yintercept), linetype = "dotted")
+ggplot(data = parSimsResMoltBi, aes(y = value, x = Method, col = Method)) +
+    facet_grid(PerformanceMeasure ~ pattern) + geom_boxplot() +
+    geom_point(data = parSimsResMoltAvBi, shape = 5) + scale_colour_manual(values = coloursSims) + 
+    xlab("") +ylab("Performance measure") +
+    geom_hline(data = hlineDf, aes(yintercept = yintercept), linetype = "dotted") +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+
+```{r prCurvesBi, fig.cap = "\\hl{Precision-recall curves smoothed over all 200 replicates with confidence bands in grey for different analysis methods (colour) and spatial patterns (columns) considered for bivariate association measures. A linear smoother was used here as there is only one true positive and the recall can only be 0 or 1.}\\label{fig:parSimsBiPR}", fig.height=3.8, fig.width=7.8}
+parSimsResMoltCurveBi = Reduce(f = rbind, lapply(parSimsResBi, function(x) x$prCurve))
+parSimsResMoltCurveBi = cbind(parSimsResMoltCurveBi, parGridBi[parSimsResMoltCurveBi[, "rep"],"pattern", drop = FALSE])
+parSimsResMoltCurveBi$pattern = factor(parSimsResMoltCurveBi$pattern, levels = allAltScen, 
+                                labels = gsub("_bi", "", allAltScen), ordered = TRUE)
+parSimsResMoltCurveBi = parSimsResMoltCurveBi[parSimsResMoltCurveBi$pattern != "Poisson" & !is.na(parSimsResMoltCurveBi$Recall),]
+ggplot(data = parSimsResMoltCurveBi, 
+       aes(x = Recall, y = Precision, col = Method)) + 
+    geom_smooth(na.rm = TRUE, method = "lm") +
+    facet_grid(. ~ pattern) + 
+    scale_colour_manual(values = coloursSims)
 ```
 
 \clearpage
@@ -1381,44 +1423,6 @@ if(!file.exists(timingsFile <- "Results/timings.RData")){
 } else load(timingsFile) 
 ```
 
-```{r matSmop, eval = FALSE}
-timingsSmop = lapply(seq_len(nrow(GridTime)), function(j){cat(j)
-    numPoints = GridTime[j, "numPoints"];numGenes = GridTime[j, "numGenes"]
-    if(!file.exists(timingsFile <- paste0("Results/timingsSmop/tim", numPoints, "_", numGenes, "_", GridTime[j, "rep"], ".RData"))){
-        List = lapply(seq_len(numPPPs), function(i){
-            ppp = runifpoint(numPoints, win = owin(xrange = c(0, 10), yrange = c(0, 10)))
-            genes = sample(paste0("gene", seq_len(numGenes)), numPoints, replace = TRUE)
-            data.frame(coords(ppp), "gene" = genes, "imageID" = paste0("in", i), "pheno_condition" = i%%2, "pheno_fov" = sample(paste0("fov", 1:3), numPoints, replace = TRUE))
-        })
-        names(List) = seq_len(numPPPs)
-        #Build hyperframe
-        hypFrame = buildHyperFrame(List)
-        hypFrame$condition = factor(seq_len(numPPPs) %% 2)
-        hypFrame$fov = factor(seq_len(numPPPs) %% 3)
-       
-        #Switch off spicyR weights to avoid errors
-        smoppixTime = peakRAM({
-            smoppixRes <- estPis(hypFrame, pis = c("nn", "nnPair"), verbose = FALSE)
-            smoppixRes <- addWeightFunction(smoppixRes, designVars = "condition")
-            smoppixModels <- fitLMMs(smoppixRes, fixedVars = "condition", randomVars = "fov", verbose = FALSE)
-        })
-        smoppixTimeFixed = peakRAM({
-            smoppixRes <- estPis(hypFrame, pis = c("nn", "nnPair"), verbose = FALSE)
-            smoppixRes <- addWeightFunction(smoppixRes, designVars = "condition")
-            smoppixModels <- fitLMMs(smoppixRes, fixedVars = c("condition", "fov"), 
-                                     verbose = FALSE)
-        })
-        matSmop = rbind("smoppix" = smoppixTime[2:4], 
-                    "smoppix_fixed" = smoppixTimeFixed[2:4])
-        save(matSmop, file = timingsFile)
-    } else load(timingsFile)
-    return(matSmop)
-})
-for(i in seq_along(timings)){
-    timings[[i]][2:3,] = timingsSmop[[i]]
-}
-```
-
 ```{r boxplotTim, fig.cap = "Average timings in minutes and peak RAM usage in megabytes (MB) over 10 repeats for different methods for testing for aggregation and colocalization. \\label{fig:timings}", fig.width = 6, fig.height = 5}
 timingsMat = cbind(Reduce(timings, f = rbind), GridTime[rep(seq_len(nrow(GridTime)), each = 4),], "Method" = rep(c("spicyR", "smoppix", "smoppix_fixed", "NE"), length.out = nrow(GridTime)*4))
 timingsMat$Elapsed_Time_min = timingsMat$Elapsed_Time_sec/60 
@@ -1466,7 +1470,7 @@ plotWf(distResYang, "nnPair")
 
 The distributions of the estimated PIs per point pattern over all features are shown in \fref{fig:histPIs}. The weighting functions for univariate and bivariate nearest-neighbour distance PIs are shown in Figures \ref{fig:nnwf}-\ref{fig:nnwfPair}. We find `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] < 0.5, na.rm = TRUE)` transcript pairs with significant colocalization and `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] > 0.5, na.rm = TRUE)` with antilocalization. The transcript pairs with the most significant colocalization and antilocalization are shown in Figures \ref{fig:colocYang}-\ref{fig:antilocYang}. A graphical network representation of the inferred colocalizations is shown in \fref{fig:hairballYang}.
 
-```{r plotPairsColoc, fig.height = 9, fig.cap = paste0("Most significantly colocalized gene pair in the \\textit{S. moellendorfii} root dataset according to \\smop. Despite its modest effect size (PI = ",  round(colocFeatEffect, 2), "), it owes its high significance to its consistency across replicates. The scale bars in black measure 50$\\mu$m.\\label{fig:colocYang}")}
+```{r plotPairsColoc, fig.height = 9, fig.cap = paste0("Most significantly colocalized gene pair in the \\textit{S. moellendorfii} root dataset according to \\smop. Despite its modest effect size (PI = ",  round(colocFeatEffect, 2), "), it owes its high significance to its consistency across replicates. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:colocYang}")}
 numPps = 35; scaleBarSizeYang = c(20, 500)
 plotTopResults(hypFrame = hypYang, results = lmmsYang, pi = "nnPair", Cex = 2, 
                Cex.main = 0.7, CexLegend = 0.9, numFeats = 1, numPps = numPps, scaleBarSize = scaleBarSizeYang)
@@ -1481,7 +1485,7 @@ plotExplore(hypYang, features = colocFeat, Cex = 2, ppps = Pps[seq_len(15)], sca
 dev.off()
 ```
 
-```{r plotPairsantioc, fig.height = 9, fig.cap = "Gene pair with most significant antilocalization in the \\textit{S. moellendorfii} root dataset according to \\smop. The scale bars in black measure 50$\\mu$m.\\label{fig:antilocYang}"}
+```{r plotPairsantioc, fig.height = 9, fig.cap = "Gene pair with most significant antilocalization in the \\textit{S. moellendorfii} root dataset according to \\smop. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:antilocYang}"}
 plotExplore(hypYang, features = antiLocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] > 0.5,])[1], Cex.main = 0.7, CexLegend = 0.9, numPps = numPps, scaleBarSize = scaleBarSizeYang)
 ```
 
@@ -1505,13 +1509,13 @@ ggraph(g, layout = "fr") + # force-directed layout (hairball)
   theme_void() 
 ```
 
-```{r plotTriosHairball, fig.height = 9, fig.cap = "\\hl{First gene triplet detected as co-expression cluster in \\fref{fig:hairballYang}. The scale bars in black measure 50$\\mu$m.\\label{fig:colocTriplet}}"}
+```{r plotTriosHairball, fig.height = 9, fig.cap = "\\hl{First gene triplet detected as co-expression cluster in \\fref{fig:hairballYang}. The red, blue and pink dots are the transcript triplet, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:colocTriplet}}"}
 numPPsYang = 15;
 plotExplore(hypYang, Cex = 1, features = c("SmCYB2;4", "SmSCL28", "SmPLTc"), 
             numPps = numPPsYang, scaleBarSize = scaleBarSizeYang)
 ```
 
-```{r plotTriosHairball2, fig.height = 9, fig.cap = "\\hl{Second gene triplet detected as co-expression cluster in \\fref{fig:hairballYang}. The scale bars in black measure 50$\\mu$m.\\label{fig:colocTriplet2}}"}
+```{r plotTriosHairball2, fig.height = 9, fig.cap = "\\hl{Second gene triplet detected as co-expression cluster in \\fref{fig:hairballYang}. The red, blue and pink dots are the transcript triplet, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:colocTriplet2}}"}
 plotExplore(hypYang, Cex = 2, features = c("SmRBRa", "SmCYCD3;3b", "SmPLTe"),
             numPps = numPPsYang, scaleBarSize = scaleBarSizeYang)
 ```
@@ -1544,10 +1548,10 @@ names(pairDoubts) = pairDoubts
 ```{r tabSignif, results = "asis"}
 colnames(pValsPrint)[c(1, 3, 4)] = c("PI estimate", "p-value", "Adjusted p-value")
 print.xtable(xtable(round(pValsPrint[pairDoubts, ][order(pValsPrint[pairDoubts, "PI estimate"]),], 3), display = c("s", "f", "f", "e", "e"),
-       caption = "P-values of nonsignificant (adjusted p-value > 0.05) or antilocalized (PI > 0.5) features according to \\smop, found colocalized by the authors. The table was sorted by PI estimate.\\label{tab:nonSignifPairs}"), comment = FALSE)
+       caption = "P-values of nonsignificant (adjusted p-value > 0.05) or antilocalized (PI point estimate > 0.5) features according to \\smop, found colocalized by the authors. The table was sorted by PI estimate.\\label{tab:nonSignifPairs}"), comment = FALSE)
 ```
 
-```{r plotAuthors1, fig.height = 9, fig.cap = "Transcript pair SmSCRa--SmSCRb which was found to be coexpressed by the authors but antilocalized in the \\smop analysis. The scale bars in black measure 50$\\mu$m.\\label{fig:authors1}"}
+```{r plotAuthors1, fig.height = 9, fig.cap = "Transcript pair SmSCRa--SmSCRb which was found to be coexpressed by the authors but antilocalized in the \\smop analysis. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:authors1}"}
 plotExplore(hypYang, features = "SmSCRa--SmSCRb", Cex = 2, Cex.main = 0.7, numPps = numPps, scaleBarSize = scaleBarSizeYang)
 ```
 
@@ -1598,7 +1602,7 @@ dev.off()
 \begin{figure}
 \centering
 \includegraphics[width = \linewidth]{GraphsPaper/ConfocalImage2VerticalTwoColumn.pdf}
-\caption{\hl{Side by side comparison of the images of the second HCR RNA-FISH experiment shown in \fref{fig:YangConfocal2} in the main paper (first and third columns) with to the right the smFISH results of the corresponding gene pairs by \textcite{Yang2023} (second and fourth columns).}\label{fig:sidebyside}}
+\caption{\hl{Side by side comparison of the images of the second HCR RNA-FISH experiment shown in \fref{fig:YangConfocal}b in the main paper (first and third columns) with to the right the smFISH results of the corresponding gene pairs by \textcite{Yang2023} (second and fourth columns).}\label{fig:sidebyside}}
 \end{figure}
 
 ```{r plotPaper, include = FALSE}
@@ -1649,7 +1653,7 @@ colSpicyR = names(which.min(joinMat[joinMat[, "smoppix_Intercept_pAdj"] < sigLev
 
 The overlap between the results of \smop and \spicy \parencite{Canete2022} \hl{(run with default parameters)} is shown in \fref{fig:vennSpicy}\label{pag:default}. As an example of different results, _smoppix_ does not consider SmCASP1--SmIAA9b significant, whereas _spicyR_ believes it is colocalized (see \fref{fig:yangSpicy2}). We also applied neighbourhood enrichment (NE), employing the \emph{average\_percentage\_of\_cells\_within\_radius} function from the \spiat package \parencite{Feng2023} to calculate the neighbourhood proportions $p_{gi}$. The Venn diagram with overlap in results with \smop is shown in \fref{fig:vennSpiat}, revealing that NE makes fewer discoveries than \spicy, but they correspond better to those of \smop than those of \spicy. The only gene pair with disagreement is shown in \fref{fig:otherSignSpiat}.
 
-```{r spicy2, fig.height = 9, fig.cap = paste("Transcript pair", colSpicyR, "which is considered colocalized by \\spicy but not significant in the \\smop analysis. The scale bars in black measure 50$\\mu$m.\\label{fig:yangSpicy2}")}
+```{r spicy2, fig.height = 9, fig.cap = paste("Transcript pair", colSpicyR, "which is considered colocalized by \\spicy but not significant in the \\smop analysis. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:yangSpicy2}")}
 tmp = sapply(hypYang$tabObs, function(x){
     sum(x[sund(colSpicyR)], na.rm = TRUE)
 })
@@ -1667,7 +1671,7 @@ otherSignSpiat = attr(vennSpiat,"intersections")$`Colocalized\nsmoppix:Depleted 
 otherSignSpiatSplit = sund(otherSignSpiat)
 ```
 
-```{r otherSignSPiat, fig.height = 9, fig.cap = paste0("Example of gene pair found antilocalized by \\smop but neighbourhood enriched by NE. In this case, the enrichment found by NE is mutual, i.e of ", otherSignSpiatSplit[1], " in the neighbourhood of ", otherSignSpiatSplit[2], " and vice versa. The scale bars in black measure 50$\\mu$m.\\label{fig:otherSignSpiat}")}
+```{r otherSignSPiat, fig.height = 9, fig.cap = paste0("Example of gene pair found antilocalized by \\smop but neighbourhood enriched by NE. In this case, the enrichment found by NE is mutual, i.e of ", otherSignSpiatSplit[1], " in the neighbourhood of ", otherSignSpiatSplit[2], " and vice versa. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:otherSignSpiat}")}
 plotExplore(hypYang, otherSignSpiat[1], Cex = 3, Cex.main = 0.7, numPps = numPps, 
             scaleBarSize = scaleBarSizeYang) 
 ```
@@ -1888,23 +1892,23 @@ EngResBi = getResults(EngListOvLmmsBi, pi = "nnPairCell", "Intercept")
 \textcite{Eng2019} measured 10,000 genes in NIH/3T3 mouse fibroblast cells. Five z-slices with 1 $\mu$m interspace were taken across multiple fields of view (FOVs). To demonstrate robustness, the experiment was performed twice on separate sections (the experiment variable). The cells were gated by hand based on DAPI staining. Here we test for vicinity to and remoteness from cell edge and for within-cell aggregation for one gene at the time. \emph{smoppix} found `r sum(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5)` genes significantly close to the cell edge and `r sum(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] > 0.5)` genes significantly far from the cell edge compared to CSR within the cell; the most significant ones in each case are shown in \fref{fig:Eng} in the main text. Also, \smop found `r sum(na.rm = TRUE, EngRes$nnCell[, "pAdj"] < sigLevel & EngRes$nnCell[, "Estimate"] < 0.5)` genes aggregated within the cell compared to CSR (\fref{fig:aggCell}). The bivariate analysis was restricted to the 1000 most highly expressed genes for computational reasons. Of the 499,500 transcript pairs tested, `r sum(na.rm = TRUE, EngResBi[, "pAdj"] < sigLevel & EngResBi[, "Estimate"] < 0.5)` transcript pairs were found to be colocalized within the cell compared to CSR (see \fref{fig:colCell}), and `r sum(na.rm = TRUE, EngResBi[, "pAdj"] < sigLevel & EngResBi[, "Estimate"] > 0.5)` pairs were antilocalized (\fref{fig:antiCell}).
 
 ```{r centroidCell, include = FALSE}
-numCellsEng = 30L; scaleBarSizeEng = c(.01, 100)
+numCellsEng = 30L; scaleBarSizeEng = c(.01, 100);scaleBarSpaceEng = 4e3
 pdf("GraphsPaper/Intracellular.pdf", height = 4.7)
-plotCells(hypEng, rownames(EngRes$edge)[c(which.min(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5), which.min(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] > 0.5))], nCells = numCellsEng, Cex = 1.5, warnPosition = FALSE, scaleBarSize = scaleBarSizeEng, scaleBarSpace = 4e3)
+plotCells(hypEng, rownames(EngRes$edge)[c(which.min(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] < 0.5), which.min(EngRes$edge[, "pAdj"] < sigLevel & EngRes$edge[, "Estimate"] > 0.5))], nCells = numCellsEng, Cex = 1.5, warnPosition = FALSE, scaleBarSize = scaleBarSizeEng, scaleBarSpace = scaleBarSpaceEng)
 #Unit is 0.1 micrometer 
 dev.off()
 ```
 
 ```{r aggCell, fig.height = 6, fig.cap = "Two genes most significantly aggregated within the cell according to \\smop. The cells are not shown in their original location in the section but rather sorted by expression. The scale bars in black measure 10$\\mu$m.\\label{fig:aggCell}"}
-plotTopResults(hypEng, EngListOvLmms, pi = "nnCell", nCells = numCellsEng, warnPosition = FALSE, scaleBarSize = scaleBarSizeEng)
+plotTopResults(hypEng, EngListOvLmms, pi = "nnCell", nCells = numCellsEng, warnPosition = FALSE, scaleBarSize = scaleBarSizeEng, scaleBarSpace = scaleBarSpaceEng) 
 ```
 
 ```{r colCell, fig.height = 6, fig.cap = "Transcript pair most significantly colocalized within the cell according to \\smop. The cells are not shown in their original location in the section but rather sorted by expression. The scale bars in black measure 10$\\mu$m.\\label{fig:colCell}"}
-plotTopResults(hypEng, EngListOvLmmsBi, pi = "nnPairCell", nCells = numCellsEng, warnPosition = FALSE, scaleBarSize = scaleBarSizeEng, numFeats = 1)
+plotTopResults(hypEng, EngListOvLmmsBi, pi = "nnPairCell", nCells = numCellsEng, warnPosition = FALSE, scaleBarSize = scaleBarSizeEng, numFeats = 1, scaleBarSpace = scaleBarSpaceEng) 
 ```
 
 ```{r antiCell, fig.height = 6, fig.cap = "Transcript pair most significantly antilocalized within the cell according to \\smop. The cells are not shown in their original location in the section but rather sorted by expression. The scale bars in black measure 10$\\mu$m.\\label{fig:antiCell}"}
-plotTopResults(hypEng, scaleBarSize = scaleBarSizeEng, EngListOvLmmsBi, pi = "nnPairCell", nCells = numCellsEng, warnPosition = FALSE, numFeats = 1, what = "antiloc")
+plotTopResults(hypEng, scaleBarSize = scaleBarSizeEng, EngListOvLmmsBi, pi = "nnPairCell", nCells = numCellsEng, warnPosition = FALSE, numFeats = 1, what = "antiloc", scaleBarSpace = scaleBarSpaceEng) 
 ```
 
 ### Authors' findings
@@ -1922,20 +1926,20 @@ sub3Mat = cbind("what" = "Subcluster 3", "gene" = c("Bicd2", "Nin", "Pcnt", "Num
 fullMat = rbind(protrusMat, nucMat, cytoMat, sub1Mat, sub2Mat, sub3Mat)
 ```
 
-```{r onlysmoppixCentroid, fig.height = 6,fig.cap = "Example genes found close to the centroid by \\smop but not in nuclear/perinuclear region by the authors. The cells are not shown in their original location in the section but rather sorted by expression.\\label{fig:smoppixCentroid}"}
+```{r onlysmoppixCentroid, fig.height = 6,fig.cap = "Example genes found close to the centroid by \\smop but not in nuclear/perinuclear region by the authors. The cells are not shown in their original location in the section but rather sorted by expression. The scale bars in black measure 10$\\mu$m.\\label{fig:smoppixCentroid}"}
 smoppixEdge = rownames(EngRes$edge)[EngRes$edge[, "Estimate"] < 0.5 & EngRes$edge[, "pAdj"] <sigLevel]
 smoppixcentroid = rownames(EngRes$centroid)[EngRes$centroid[, "Estimate"] < 0.5 & EngRes$centroid[, "pAdj"] <sigLevel]
 onlyCentrsmoppix = setdiff(smoppixcentroid, protrusMat[, "gene"])
 smoppixAgg = rownames(EngRes$nnCell)[EngRes$nnCell[, "Estimate"] < 0.5 & EngRes$nnCell[, "pAdj"] <sigLevel & !is.na(EngRes$nnCell[, "pAdj"])]
-plotCells(hypEng, scaleBarSize = scaleBarSizeEng, onlyCentrsmoppix[1:3], Cex = 1.8, nCells = numCellsEng, warnPosition = FALSE)
+plotCells(hypEng, scaleBarSize = scaleBarSizeEng, onlyCentrsmoppix[1:3], Cex = 1.8, nCells = numCellsEng, warnPosition = FALSE, scaleBarSpace = scaleBarSpaceEng)  
 ```
 
 ```{r onlyAuthorsProtrusions, fig.height = 6,fig.cap = "Example genes found in protrusions by the authors but not close to the edge by \\smop. The cells are not shown in their original location in the section but rather sorted by expression. The scale bars in black measure 10$\\mu$m. \\label{fig:authorsProtrusions}"}
 onlyProtrusions = setdiff(protrusMat[, "gene"], smoppixEdge)
-plotCells(hypEng, scaleBarSize = scaleBarSizeEng, onlyProtrusions[1:3], Cex = 2.25, nCells = numCellsEng, warnPosition = FALSE)
+plotCells(hypEng, scaleBarSize = scaleBarSizeEng, onlyProtrusions[1:3], Cex = 2.25, nCells = numCellsEng, warnPosition = FALSE, scaleBarSpace = scaleBarSpaceEng)  
 ```
 
-```{r vennEngFibroblasts, fig.width = 11, fig.height = 7.2, fig.cap = "Venn diagram of overlap between results from the authors and from \\smop. The scale bars in black measure 10$\\mu$m.\\label{fig:vennOverallFibro}"}
+```{r vennEngFibroblasts, fig.width = 11, fig.height = 7.2, fig.cap = "Venn diagram of overlap between results from the authors and from \\smop.\\label{fig:vennOverallFibro}"}
 par(mar = c(4.75,5.3,1,1))
 venn(list("Close to\nedge smoppix" = smoppixEdge, "Protrusions\nauthors" = protrusMat[, "gene"], "Close to\ncentroid smoppix" = smoppixcentroid,  "Nuclear/perinuclear\nauthors" = nucMat[, "gene"], "Cytoplasm\nauthors" = cytoMat[, "gene"]))
 ```
@@ -1944,7 +1948,7 @@ venn(list("Close to\nedge smoppix" = smoppixEdge, "Protrusions\nauthors" = protr
 
 ## \smop detects shifts in localization patterns over time in bacterial biofilms \label{sec:dar}
 
-\textcite{Dar2021} profiled \emph{Pseudomonas aeruginosa} biofilms for spatial expression of 108 genes after 10h of growth (7 replicates) and after 35h of growth (3 replicates). The biofilms were scanned at different depths (z-coordinates), but the lower and upper layers often yielded few molecules. The data were analysed in 2D here, so considering each z-plane as a separate replicate, and including a random effect for biofilm instance. We look for differences in spatial organisation between 10h and 35h. The transcript pair with most significant differential spatial localization between 10h and 35h is shown in \fref{fig:Dar} in the main text. Further differences between both conditions are shown here in Figures \ref{fig:strongDiffDar}-\ref{fig:strongDiffDarBi}, demonstrating \smop' ability to detect differences in spatial localization patterns between conditions.
+\textcite{Dar2021} profiled \emph{Pseudomonas aeruginosa} biofilms for spatial expression of 108 genes after 10h of growth (7 replicates) and after 35h of growth (3 replicates). The biofilms were scanned at different depths (z-coordinates), but the lower and upper layers often yielded few molecules. The data were analysed in 2D here, so considering each z-plane as a separate replicate, and including a random effect for biofilm instance. We look for differences in spatial organisation between 10h and 35h. The transcript pair with most significant differential spatial localization between 10h and 35h is shown in \fref{fig:Dar} in the main text. Further differences between both conditions are shown here in Figures \ref{fig:strongDiffDar}-\ref{fig:strongDiffDarBi3}, demonstrating \smop' ability to detect differences in spatial localization patterns between conditions.
 
 ```{r DarOverall}
 if(!file.exists(DarOverallFile <- "Results/DarOverall.RData")){
@@ -1977,22 +1981,22 @@ CexPlot = 2;psz = 3;Height = 4.6;Width = 7;CexLegend = 1.3;CexMain = 1.2; MarDar
 scaleBarSizeDar = c(10, 500)
 ```
 
-```{r moreAgg10h, fig.cap = "Gene most significantly more regularly spaced at time 35h than 10h according to \\smop. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:strongDiffDar}"}
+```{r moreAgg10h, fig.cap = "Gene most significantly more regularly spaced at time 35h than 10h according to \\smop. The red dots represent the transcripts of the gene, all other transcripts are shown in grey. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:strongDiffDar}"}
 plotTopResults(hypDarSub, results = DarLmms, pi = "nn", effect = "time", Cex = CexPlot, Nrow = 3, numFeats = 1, what = "agg", effectParameter = "10h", CexLegend = CexLegend, Cex.main = CexMain, scaleBarSize = scaleBarSizeDar)
 ```
 
-```{r strongestMoreColoc10h, fig.cap ="Gene pair most significantly more antilocalized at time 35h than 10h according to \\smop. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:strongDiffDarBi}"}
+```{r strongestMoreColoc10h, fig.cap ="Gene pair most significantly more antilocalized at time 35h than 10h according to \\smop. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:strongDiffDarBi}"}
 plotTopResults(hypDarSub, Nrow = 3, results = DarLmms, pi = "nnPair", numFeats = 1, effect = "time", effectParameter = "10h", what = "coloc", Cex = CexPlot, CexLegend = CexLegend, Cex.main = CexMain, scaleBarSize = scaleBarSizeDar)
 ```
 
-```{r exportPaperColoc, fig.cap = "Gene pair most significantly more colocalized at time 35h than 10h \\label{fig:strongDiffDarBi2}", include = FALSE}
+```{r exportPaperColoc, include = FALSE}
 pdf("GraphsPaper/darDiff.pdf", height = 6)
-#Unit is 0.1 micrometer
-plotTopResults(hypDarSub, Nrow = 3, results = DarLmms, pi = "nnPair", numFeats = 1, effect = "time", effectParameter = "35h", what = "coloc", Cex = CexPlot, CexLegend = CexLegend, Cex.main = CexMain, Mar = c(0.5, 0.1, 1, 0.1), scaleBarSize = scaleBarSizeDar) 
+#Unit is 0.1 micrometer 
+plotTopResults(hypDarSub, maxPlot = 8e4, Nrow = 3, results = DarLmms, pi = "nnPair", numFeats = 1, effect = "time", effectParameter = "35h", what = "coloc", Cex = CexPlot, CexLegend = CexLegend, Cex.main = CexMain, Mar = c(0.5, 0.1, 1, 0.1), scaleBarSize = scaleBarSizeDar) 
 dev.off() 
 ```
 
-```{r Coloc2, fig.cap = "\\hl{Gene pair third most significantly more colocalized after 35h than after 10h of growth according to \\smop in the bacterial biofilm dataset by \\textcite{Dar2021}. The red and blue dots are the transcripts pair, all other transcripts are shown in grey. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.}\\label{fig:strongDiffDarBi3}"}
+```{r Coloc2, fig.cap = "\\hl{Gene pair third most significantly more colocalized after 35h than after 10h of growth according to \\smop in the bacterial biofilm dataset by \\textcite{Dar2021}. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.}\\label{fig:strongDiffDarBi3}"}
 resDar = getResults(DarLmms, "nnPair", "time")
 plotExplore(hypDarSub, Nrow = 3, Mar = c(0.5, 0.1, 1, 0.1), features = rownames(resDar[resDar[, "time35h"]<0,])[3], Cex = CexPlot, CexLegend = CexLegend, Cex.main = CexMain, scaleBarSize = scaleBarSizeDar)
 ```
@@ -2024,11 +2028,11 @@ colnames(tmpColoc)[colnames(tmpColoc)=="pAdj"] = "Adjusted p-value"
 denitPairs = makePairs(denitri)
 ```
 
-```{r denitri, fig.cap = "Denitrification gene pair with most significant colocalization according to \\smop. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:denitri}"}
+```{r denitri, fig.cap = "Denitrification gene pair with most significant colocalization according to \\smop. The titles show z-coordinate, replicate and timepoint, in that order. The red and blue dots are the transcript pair, all other transcripts are shown in grey. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:denitri}"}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3, names(which.min(tmpColoc[denitPairs,"Adjusted p-value"])))
 ```
 
-```{r oxstressFig,fig.cap = "Oxidate stress gene (sodM) and heat shock gene (ftsH): the gene pair with most significant trancript colocalization according to \\smop. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:oxstress}"}
+```{r oxstressFig,fig.cap = "Oxidate stress gene (sodM) and heat shock gene (ftsH): the gene pair with most significant trancript colocalization according to \\smop. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:oxstress}"}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3, "sodM--ftsH")
 ```
 
@@ -2093,15 +2097,15 @@ vennSpicy = venn(list("spicyR\naggregated" = rownames(AggMatSpicy)[AggMatSpicy[,
 diff22 = attr(vennSpicy,"intersections")$`spicyR\naggregated:smoppix\nregular`
 ```
 
-```{r mostAggSpicy, fig.cap = "Most significantly aggregated gene according to \\spicy (also significant in the \\smop analysis). The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:aggSpicy}"}
+```{r mostAggSpicy, fig.cap = "Most significantly aggregated gene according to \\spicy (also significant in the \\smop analysis). The red dots are the transcripts of this gene, all other transcripts are shown in grey. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:aggSpicy}"}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercept"] > 0, "spicy_Intercept_pVal"])), Nrow = 3) 
 ```
 
-```{r mostRegSpicy, fig.cap = "Most significantly regularly spaced gene according to \\spicy (not significant for \\smop). The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:regSpicy}"}
+```{r mostRegSpicy, fig.cap = "Most significantly regularly spaced gene according to \\spicy (not significant for \\smop). The titles show z-coordinate, replicate and timepoint, in that order. The red dots are the transcripts of this gene, all other transcripts are shown in grey.  Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:regSpicy}"}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3, names(which.min(AggMatSpicy[AggMatSpicy[, "spicy_Intercept"] < 0, "spicy_Intercept_pVal"])))
 ```
 
-```{r diffSpicy2, fig.cap = "Gene found aggregated by \\spicy but regularly spaced by \\smop. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:diffSpicy2}", fig.height = 7}
+```{r diffSpicy2, fig.cap = "Gene found aggregated by \\spicy but regularly spaced by \\smop. The titles show z-coordinate, replicate and timepoint, in that order. The red dots are the transcripts of this gene, all other transcripts are shown in grey. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:diffSpicy2}", fig.height = 7}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3,  rownames(DarRes$nn[diff22, "pAdj", drop = FALSE])[1], Cex = 0.8)
 ```
 
@@ -2118,15 +2122,15 @@ diff1Bi = attr(vennSpicyColoc,"intersections")[["spicyR\nantilocalized:smoppix\n
 diff2Bi = attr(vennSpicyColoc,"intersections")[["spicyR\ncolocalized:smoppix\nantilocalized"]]
 ```
 
-```{r mostColocSpicy, fig.cap = "Most significantly colocalized gene pair according to \\spicy (not significant for \\smop). The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:spicyColoc}"}
+```{r mostColocSpicy, fig.cap = "Most significantly colocalized gene pair according to \\spicy (not significant for \\smop). The titles show z-coordinate, replicate and timepoint, in that order. The red and blue dots are the transcript pair, all other transcripts are shown in grey. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:spicyColoc}"}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3,  colocSpicy <- names(which.min(ColocMatSpicy[ColocMatSpicy[, "spicy_Intercept"] > 0, "spicy_Intercept_pVal"])))
 ```
 
-```{r mostAntiLocSpicy, fig.cap = "Most significantly antilocalized gene according to \\spicy (not significant for \\smop). The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:spicyAntiloc}"}
+```{r mostAntiLocSpicy, fig.cap = "Most significantly antilocalized gene pair according to \\spicy (not significant for \\smop). The titles show z-coordinate, replicate and timepoint, in that order. The red and blue dots are the transcript pair, all other transcripts are shown in grey. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:spicyAntiloc}"}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3, antiLocSpicy <- names(which.min(ColocMatSpicy[ColocMatSpicy[, "spicy_Intercept"] < 0, "spicy_Intercept_pVal"])))
 ```
 
-```{r diffAntiLoc, fig.cap = "Most significantly antilocalized gene pair according to \\smop among the gene pairs colocalized according to \\spicy. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:spicyDiffAntiloc}"}
+```{r diffAntiLoc, fig.cap = "Most significantly antilocalized gene pair according to \\smop among the gene pairs colocalized according to \\spicy. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The titles show z-coordinate, replicate and timepoint, in that order. Per biofilm, the z-plane with highest overall expression is shown. The scale bars in black measure 50$\\mu$m.\\label{fig:spicyDiffAntiloc}"}
 plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3, names(which.min(DarRes$nnPair[diff2Bi, "pAdj"])))
 ```
 
@@ -2156,32 +2160,17 @@ if(!file.exists(piTNBCfile <- "Results/piTNBC.RData")){
 } else load(piTNBCfile)
 ```
 
-```{r explTNBC, fig.cap = "Exploratory plot of breast cancer data.\\label{fig:explTNBC}", include = FALSE}
-#Cell counts
-cellCounts = makeTabObsMat(pisTNBC$hypFrame, pisTNBC$hypFrame$Person)
-pdf("GraphsPaper/exploreTNBC.pdf", height = 5.8) 
-hypTNBCcopy = hypTNBC
-hypTNBCcopy$ppp = lapply(hypTNBCcopy$ppp, function(x){
-    marks(x)$gene[marks(x)$gene!= "Tumor"] = "Other cells"
-    marks(x)$gene[marks(x)$gene== "Tumor"] = "Tumor cells"
-    x
-})
-scaleBarSizeKeren = c(12, 300)
-plotExplore(hypTNBCcopy, Cex.main = 0.64, features = c("Tumor cells", "Other cells"), Cols = c("Tumor cells" = "red", "Other cells" = "gray"), CexLegend = 0.85, CexLegendMain = 1, Cex = 0.8, Nrow = 5, Mar = c(0.3, 0.1, .7, 0.1), scaleBarSize = scaleBarSizeKeren)
-#Unit is about 0.5 micrometer
-dev.off() 
-rm(hypTNBCcopy)
-```
-
 ```{r boxage, fig.cap = "Boxplot of age (y-axis) as a function of tumor type (x-axis).\\label{fig:boxAge}", fig.height = 3.5, fig.width = 4.5}
 boxplot(hypTNBC$age ~ hypTNBC$Class, ylab = "Age", xlab = "Tumor type")
 ```
 
 ```{r cellCounts, fig.cap = "Boxplots of cell counts (y-axis) as a function of tumor type (colour) for different cell types (x-axis).\\label{fig:boxCount}", fig.height = 4}
+cellCounts = makeTabObsMat(pisTNBC$hypFrame, pisTNBC$hypFrame$Person)
 dfcc = data.frame(cellCounts, "Tumor_type" = hypTNBC$Class)
 moltDfcc = melt(dfcc, id.vars = "Tumor_type")
 ggplot(data = moltDfcc, aes(y = value, x = variable, fill = Tumor_type)) +
-     geom_boxplot() + ylab("Cell count") + xlab("Cell type") + theme(axis.text.x = element_text(angle = 90))
+     geom_boxplot() + ylab("Cell count") + xlab("Cell type") + 
+    theme(axis.text.x = element_text(angle = 90))
 ```
 
 \clearpage
@@ -2190,12 +2179,13 @@ ggplot(data = moltDfcc, aes(y = value, x = variable, fill = Tumor_type)) +
 
 Significant differences between tumor types according to \smop are shown in Table \ref{tab:smoptnbc}. The cell type pair most significantly more antilocalized in the "compartimentalised" type according to \smop (CD4T--tumor) is shown in \fref{fig:nnpairClass}. Significant differences between tumor types in neighbourhood enrichment tests are found in Table \ref{tab:spiattnbc}.
 
-```{r resClass2, fig.cap = "Cell type pair most significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass}"}
+```{r resClass2, fig.cap = "Cell type pair most significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop. The red and blue dots are the cell type pair, all other cell types are grey. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass}"}
+scaleBarSizeKeren = c(12, 300)
 plotTopResults(hypFrame = hypTNBC, scaleBarSize = scaleBarSizeKeren, results = TNBClmms, pi = "nnPair", effect = "Class", effectParameter = "compartimentalised", what = "anti", numFeat =1, Cex.main = 0.9, Nrow = 5)
 #Indeed clear differences between classes
 ```
 
-```{r resClass3, fig.cap = "Scatterplot of the only cell type pair not involving tumor cells that is significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass2}"}
+```{r resClass3, fig.cap = "Scatterplot of the only cell type pair not involving tumor cells that is significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop. The red and blue dots are the cell type pair, all other cell types are grey. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass2}"}
 plotExplore(hypFrame = hypTNBC, scaleBarSize = scaleBarSizeKeren, "CD4T--Otherimmune", Cex.main = 0.9, Nrow = 5)
 ```
 
@@ -2205,7 +2195,7 @@ tabBi = getResults(TNBClmms, pi = "nnPair", "Class")
 tabAll = rbind(tabUni[tabUni[, "pAdj"] < sigLevel,,drop = FALSE], tabBi[tabBi[, "pAdj"] < sigLevel,])
 colnames(tabAll) = gsub("Class", "Tumor type: ", colnames(tabAll))
 colnames(tabAll)[3:4] = c("P-value", "Adjusted p-value")
-print.xtable(xtable(tabAll, caption = "\\label{tab:smoptnbc}Table of univariate and bivariate localization patterns significantly different between tumor types according to \\smop. The first two columns show the coefficients of the tumor types in the sum coding scheme, with positive numbers indicqting stronger regularity or antilocalisation. For the bivariate patterns, the cell types are separated by hyphens.", digits = c(1,3,3,1,1), display = c("s", "f", "f", "e", "e")), comment = FALSE)
+print.xtable(xtable(tabAll, caption = "\\label{tab:smoptnbc}Table of univariate and bivariate localization patterns significantly different between tumor types according to \\smop. The first two columns show the coefficients of the tumor types in the sum coding scheme, with positive numbers indicating stronger regularity or antilocalisation. For the bivariate patterns, the cell types are separated by hyphens.", digits = c(1,3,3,1,1), display = c("s", "f", "f", "e", "e")), comment = FALSE)
 ```
 
 ```{r spicyRtnbc}
@@ -2264,7 +2254,7 @@ colnames(totTab)[2:3] = c("Standard error", "P-value")
 print.xtable(xtable(totTab, caption = "\\label{tab:spiattnbc}Table of significant differences in univariate and bivariate neighbourhood enrichments between tumor types. The estimates shown are the average difference (the 'mixed' tumors minus the 'compartimentalised' tumors) in log-ratio of the proportion of molecules in the neighbourhood over overall in the image. For the bivariate results (cell type pairs separated by hyphens), the estimate refers to enrichment of the second cell type in the vicinity of the first. Positive estimates indicate more aggregation or colocalization in the mixed group, and vice versa for negative estimates.", digits = 2,  display = c("s", "f", "f", "e", "e")), comment = FALSE)
 ```
 
-```{r compareSpicySmoppixVanderdoes, fig.cap = "Boxplots of univariate nearest-neighbour distance PI by \\smop (left), u-statistic by \\textit{spicyR} (center) and NE log-ratio (right) (y-axis) as a function of tumor type (x-axis) for tumor cells. The difference is pronounced for \\smop and NE, which capture the aggregation of tumor cells as seen from \\fref{fig:explTNBC} in the main text. The difference in \\textit{spicyR}'s test statistic is less pronounced and even suggests stronger aggregation of tumor cells in the mixed class.\\label{fig:diffVanderdoes}", fig.height = 4.25}
+```{r compareSpicySmoppixVanderdoes, fig.cap = "Boxplots of univariate nearest-neighbour distance PI by \\smop (left), u-statistic by \\textit{spicyR} (center) and NE log-ratio (right) (y-axis) as a function of tumor type (x-axis) for tumor cells. The difference is pronounced for \\smop and NE, which capture the aggregation of tumor cells as seen from \\fref{fig:explTNBC} in the main text. The outlier of the mixed class is the patient with age 37 mentioned as possible missclassified instance in the main text, see \\fref{fig:explTNBC}. The difference in \\textit{spicyR}'s test statistic is less pronounced and even suggests stronger aggregation of tumor cells in the mixed class.\\label{fig:diffVanderdoes}", fig.height = 4.25}
 par(mfrow = c(1,3), mar = c(4,5,4,2)) 
 tumorDfPi = buildDataFrame(pisTNBC, gene = "Tumor", pi = "nn")
 boxplot(tumorDfPi$pi ~ tumorDfPi$Class, ylab = "Nearest-neighbour probabilistic index", xlab = "Tumor type", main = "smoppix")
@@ -2274,11 +2264,31 @@ boxplot(TNBCspiat$loMat["Tumor",]~ hypTNBC$Class, ylab = "Log-ratio of average p
 par(mfrow = c(1,1))
 ```
 
+```{r explTNBC, include = FALSE}
+#Cell counts
+pdf("GraphsPaper/exploreTNBC.pdf", height = 7.2) 
+hypTNBCcopy = hypTNBC
+hypTNBCcopy$ppp = lapply(hypTNBCcopy$ppp, function(x){
+    marks(x)$gene[marks(x)$gene!= "Tumor"] = "Other cells"
+    marks(x)$gene[marks(x)$gene== "Tumor"] = "Tumor cells"
+    x
+})
+hypTNBCcopy$image = paste0(tumorDfPi$Class, ", age=", tumorDfPi$age, 
+                               ", PI=", signif(tumorDfPi$pi, 2))
+plotExplore(hypTNBCcopy[order(tumorDfPi$pi),], Cex.main = 0.56, 
+            features = c("Tumor cells", "Other cells"), CexLegend = 0.85, 
+            Cols = c("Tumor cells" = "red", "Other cells" = "gray"), CexLegendMain = 1, 
+            Cex = 0.8, Nrow = 6, Mar = c(0.3, 0.1, .7, 0.1), scaleBarSize = scaleBarSizeKeren)
+#Unit is about 0.5 micrometer
+dev.off() 
+rm(hypTNBCcopy)
+```
+
 \clearpage
 
 ### Prediction models \label{sec:predModels}
 
-Next we investigated whether the inclusion of PI's as predictor of the tumor type, on top of age and cell type counts, improves predictive accuracy. We use a penalized linear regression model (LASSO) \parencite{Tibshirani1996} implemented in the _glmnet_ package \parencite{Friedman2010} as prediction model, and assess its predictive accuracy (defined as the proportion of correctly classified tumors) through 20-fold cross-validation. The penalty parameter $\lambda$ is tuned through an inner cross-validation loop. The following sets of predictors are used in the model: patient age is always included as predictor, and cell type counts or PIs or both are included in additional models. When only age is included, an ordinary generalized linear model is used for prediction, without regularization. As feature selection procedure for the PIs, \smop is applied to the observations in the training folds with tumor type and age as fixed effects, and PIs significantly associated with tumor type are retained as predictors for the LASSO model; their missing values are set to 0.5. The splitting into folds was repeated 200 times and out-of-sample accuracy and its standard error were estimated following \textcite{Bates2023}. The results are shown in Table \ref{tab:acc} in the main text, and confirm that spatial localization patterns add information on tumor type on top of cell counts and patient age. A similar analysis was carried out using NE log-ratios as predictors, yielding similar results to the PIs as shown in Table \ref{tab:accAlt}. Since \spicy does not declare any cell types significant, no cell type (pairs) were filtered out and all u-statistics are fed as predictors to the LASSO model. Yet inclusion of these u-statistics deteriorates the predictive performance (see Table \ref{tab:accAlt}).
+Next we investigated whether the inclusion of PIs as predictor of the tumor type, on top of age and cell type counts, improves predictive accuracy. We use a penalized linear regression model (LASSO) \parencite{Tibshirani1996} implemented in the _glmnet_ package \parencite{Friedman2010} as prediction model, and assess its predictive accuracy (defined as the proportion of correctly classified tumors) through 20-fold cross-validation. The penalty parameter $\lambda$ is tuned through an inner cross-validation loop. The following sets of predictors are used in the model: patient age is always included as predictor, and cell type counts or all uni- and bivariate PIs or both are included in additional models. When only age is included, an ordinary generalized linear model is used for prediction, without regularization. As feature selection procedure for the PIs, \smop is applied to the observations in the training folds with tumor type and age as fixed effects, and PIs significantly associated with tumor type are retained as predictors for the LASSO model; their missing values are set to 0.5. The splitting into folds was repeated 200 times and out-of-sample accuracy and its standard error were estimated following \textcite{Bates2023}. The results are shown in Table \ref{tab:acc} in the main text, and confirm that spatial localization patterns add information on tumor type on top of cell counts and patient age. A similar analysis was carried out using NE log-ratios as predictors, yielding similar results to the PIs as shown in Table \ref{tab:accAlt}. Since \spicy does not declare any cell types significant, no cell type (pairs) were filtered out and all u-statistics are fed as predictors to the LASSO model. Yet inclusion of these u-statistics deteriorates the predictive performance (see Table \ref{tab:accAlt}).
 
 ```{r fitCVsave}
 nFolds = 20;nReps = 200;nPCs = 3
@@ -2420,7 +2430,7 @@ rownames(cvMatAlt) = c("Age", "Age + cell count", "Age + cell count + NE log-rat
 
 ```{r fitCValt, results = "asis"}
 cvMatAlt = cvMatAlt[c("Age + NE log-ratio", "Age + cell count + NE log-ratio", "Age + spicyR u", "Age + cell count + spicyR u"),]
-print.xtable(comment = FALSE, xtable(t(cvMatAlt), caption = "Predictive accuracy \\hl{estimated by cross-validation} for LASSO regression models with different sets of predictors (column names) derived from NE and \\spicy. Standard errors (SE) of the accuracy estimates are shown in the second row. For \\spicy, no preliminary feature filtering through hypothesis testing was applied.\\label{tab:accAlt}", align = "|r|c|c|c|c|"))
+print.xtable(comment = FALSE, xtable(t(cvMatAlt), caption = "Predictive accuracy \\hl{estimated by 20-fold cross-validation} for LASSO regression models with different sets of predictors (column names) derived from NE and \\spicy. Standard errors (SE) of the accuracy estimates are shown in the second row. For \\spicy, no preliminary feature filtering through hypothesis testing was applied.\\label{tab:accAlt}", align = "|r|c|c|c|c|"))
 ```
 
 \clearpage
@@ -2489,7 +2499,7 @@ legend("topright", col = c("black", "blue"), lty = 1, cex = 0.8, y.intersp = 2.2
 
 ## The bivariate nearest-neighbour PI \label{sec:nnPIbi}
 
-\hl{Here we provide the calculations for the bivariate counterpart of the univariate nearest-neighbour PI, provided in the Methods section in the main text. We consider the distribution function $G_{0ghi}$ of nearest neighbour distances of molecules of feature $h$ to feature $g$. In this case, feature label permutation would amount to sampling without replacement from an urn with $N_{ht}$ successes and $N_t-N_{ht}-1$ failures (subtracting the point $i$ itself). This means that equation \eqref{eq:hyperGeom} above can be applied with $q=1$, $w = N_t-1$ and $k = N_{ht}$, and the corresponding cumulative distribution function is $H_{gh}(x) = Pr_{gh}(X\leq x) = \sum_{k=0}^x Pr_{gh}(X=k)$. Equation \eqref{eq:funsNH} remains the same, whereas the PI can now be calculated in analogy to \eqref{eq:piNhyp} as}
+\hl{Here we provide the calculations for the bivariate counterpart of the univariate nearest-neighbour PI, provided in the Methods section in the main text. We consider the distribution function $G_{0ghi}$ of nearest neighbour distances of molecules of feature $h$ to molecule $i$ of feature $g$ (the same reasoning can be made for $G_{0hgj}$ featuring on the right side of equation \eqref{eq:PInnBi} in the main text and equation \eqref{eq:piNhypBi} below). In this case, feature label permutation would amount to sampling without replacement from an urn with $N_{ht}$ successes and $N_t-N_{ht}-1$ failures (subtracting the point $i$ itself). This means that equation \eqref{eq:hyperGeom} above can be applied with $q=1$, $w = N_t-1$ and $k = N_{ht}$, and the corresponding cumulative distribution function is $H_{gh}(x) = Pr_{gh}(X\leq x) = \sum_{k=0}^x Pr_{gh}(X=k)$. Equation \eqref{eq:funsNH} remains the same, whereas the PI can now be calculated in analogy to \eqref{eq:piNhyp} as}
 
 \begin{equation}
 \begin{aligned}
@@ -2522,7 +2532,7 @@ The slopes $\alpha_t$ and $\beta_t$ are thus allowed to vary across point patter
 
 \hl{Genes with higher numbers of transcripts tend to be more often discovered by \smop because the association tests have more power. This trend is visualized in \fref{fig:pvalExpr}, which plots log p-values as a function of relative expression or sum of relative expressions for gene pairs, both on the log-scale, the datasets and tests in the title.}
 
-```{r plotRelExprYang, fig.cap = "Scatterplots of \\smop log10 p-values (y-axis) as a function of relative expression of the log10 of the gene or sum of relative expressions of the gene pair (x-axis) for three datasets and localization patterns investigated (titles). The blue line is a loess smoother.\\label{fig:pvalExpr}", fig.height = 3.75, fig.width = 5.5}
+```{r plotRelExprYang, fig.cap = "Scatterplots of \\smop log10 p-values (y-axis) as a function of log10 of the relative expression of the gene or log10 of the sum of relative expressions of the gene pair (x-axis) for three datasets and localization patterns investigated (titles). The blue line is a loess smoother.\\label{fig:pvalExpr}", fig.height = 3.75, fig.width = 5.5}
 tabMatYang = makeTabObsMat(hypYang)
 relExprYang = colSums(tabMatYang)/sum(tabMatYang)
 sumExprYang = sapply(selfName(rownames(resYang[["Intercept.nnPair"]])), function(x){
@@ -2604,7 +2614,7 @@ $\epsilon_{gi}$ & Regression error & Regression error in the linear model for fe
 # Software versions
 
 ```{r sessioInfo}
-sessionInfo() 
+sessionInfo()
 ```
 
 <!-- Illustrative graphs on point processes and interevent distances -->
