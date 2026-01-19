@@ -1,5 +1,5 @@
 ---
-title: "Supplementary material for 'Unified nonparametric analysis of single-molecule spatial omics data using probabilistic indices'"
+title: "Supplementary material for 'smoppix: unified nonparametric analysis of single-molecule spatial omics data using probabilistic indices'"
 author: "Stijn Hawinkel, Xilan Yang, Ward Poelmans, Hans Motte, Tom Beeckman and Steven Maere"
 output: 
   pdf_document:
@@ -16,9 +16,9 @@ knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE,
                       cache.lazy = FALSE, message = FALSE, echo = FALSE, 
                       eval = TRUE, tidy = TRUE, fig.width = 9, fig.height = 7, 
                       purl = TRUE, fig.show = "hold", fig.pos = "p")
-libs = c("ggplot2", "BiocParallel", "reshape2", "grid", "psych", "spatstat", "xtable",
+libs = c("ggplot2", "BiocParallel", "reshape2", "grid", "psych", "spatstat", "xtable", "httr",
          "gplots", "openxlsx", "SpatialExperiment", "glmnet", "SPIAT", "png", "tiff",
-         "lmerTest", "spicyR", "smoppix", "parallel", "peakRAM", "extraDistr", "funkycells", "dbscan", "RCurl", "igraph", "ggraph", "PRROC")
+         "lmerTest", "spicyR", "smoppix", "parallel", "peakRAM", "extraDistr", "funkycells", "dbscan", "RCurl", "igraph", "ggraph", "PRROC", "R.matlab", "RImageJROI")
 for (i in libs){
   library(i, character.only = TRUE, quietly = TRUE)
 };rm(i, libs)
@@ -43,9 +43,15 @@ To assess calibration of the statistical tests, we repeatedly permute the gene l
 
 ```{r readInYang}
 if(!file.exists(yangFile <- "Data/Yang2023.RData")){
-    # download.file(url = "www.cell.com/cms/10.1016/j.cub.2023.08.030/attachment/35fec8f6-bbbe-4629-92e3-4397b3ab9582/mmc2.xlsx", destfile = "Data/Yang2023/SupplementTables.xlsx") #Refused by Cell, see Supplementary files instead
+    #Download .xlsx with gene names from cell site
+    GET("www.cell.com/cms/10.1016/j.cub.2023.08.030/attachment/35fec8f6-bbbe-4629-92e3-4397b3ab9582/mmc2.xlsx",
+    write_disk("Data/Yang2023/SupplementTables.xlsx", overwrite = TRUE),
+    user_agent("Mozilla/5.0") #Prevent 403 errors by pretending to be a browser
+    )
     geneCodesToNames = read.xlsx("Data/Yang2023/SupplementTables.xlsx", sheet = 1, startRow = 2, cols = 1:7)
     # 3 genes are not in this table: LOC9650718, LOC112344873 and LOC9652292. Xilan Yang deleted them as they are similar to other genes present
+    # Raw data from zenodo
+    downloadAndUnzip("https://zenodo.org/records/18269124/files/Yang2023pointLocations.zip", destfile = "Data/Yang2023/coordinates")
     coordFiles = list.files("Data/Yang2023/coordinates", full.names = TRUE)
     expNames = sapply(coordFiles, substr, 40, 43)
     coordList = lapply(seq_along(coordFiles), function(i){
@@ -259,20 +265,37 @@ if(!file.exists(distYangFile <- "Results/distResYang.RData")){
 
 ```{r locationData}
 if(!file.exists(pointLocFile <- "Data/pointLoc.RData")){#See supplementary files
-    pointLoc = read.csv("Data/Eng2019/NIH3T3/CSVsMat.csv")
-    pointLoc = pointLoc[,-c(1, 6)]
+    downloadAndUnzip("https://zenodo.org/records/2669683/files/seqFISH+_NIH3T3_point_locations.zip", 
+                     destfile = "Data/Eng2019/NIH3T3/seqFISH+_NIH3T3_point_locations")
+    EngExp1 = readMat("Data/Eng2019/NIH3T3/seqFISH+_NIH3T3_point_locations/RNA_locations_run_1.mat")$tot
+    EngExp2 = readMat("Data/Eng2019/NIH3T3/seqFISH+_NIH3T3_point_locations/RNA_locations_run_2.mat")$tot
+    geneInfo = readMat("Data/Eng2019/NIH3T3/seqFISH+_NIH3T3_point_locations/all_gene_Names.mat")$allNames
+    id1 = which(sapply(EngExp1, is.list))
+    grid1 = expand.grid("fov" = 0:(dim(EngExp1)[1]-1), "cellData" = 0:(dim(EngExp1)[2]-1), "gene" = unlist(geneInfo))
+    pointLoc10 = lapply(id1, function(i){
+        t(EngExp1[[i]][[1]])
+    })
+    nrowPointLoc1 = sapply(pointLoc10, ncol)
+    id1rep = rep(id1, nrowPointLoc1)
+    pointLoc1Mat = matrix(unlist(pointLoc10), byrow = TRUE, ncol = 3, dimnames = list(NULL, c("x", "y", "experiment")))
+    pointLoc1Mat = cbind(pointLoc1Mat, grid1[id1rep,])
+    id2 = which(sapply(EngExp2, is.list))
+    grid2 = expand.grid("fov" = 0:(dim(EngExp2)[1]-1), "cellData" = 0:(dim(EngExp2)[2]-1), "gene" = unlist(geneInfo))
+    pointLoc20 = lapply(id2, function(i){
+        t(EngExp2[[i]][[1]])
+    })
+    nrowPointLoc2 = sapply(pointLoc20, ncol)
+    id2rep = rep(id2, nrowPointLoc2)
+    pointLoc2Mat = matrix(unlist(pointLoc20), byrow = TRUE, ncol = 3, dimnames = list(NULL, c("x", "y", "experiment")))
+    pointLoc2Mat = cbind(pointLoc2Mat, grid2[id2rep,])
+    pointLoc2Mat$experiment = 2
+    pointLoc = rbind(pointLoc1Mat, pointLoc2Mat)
     pointLoc$group = with(pointLoc, paste(fov, experiment, sep = "_"))
     # Cell combines experiment, fov and cell
     save(pointLoc, file = pointLocFile)
 }
 if(!file.exists(pObjEngFile <- "Data/pObjEng.RData")){
     load(pointLocFile)
-    pObjEng = ppp(x = pointLoc$x, y = pointLoc$y,
-                  marks = data.frame("gene" = pointLoc$gene, "fov" = as.character(pointLoc$fov),
-                                     "experiment" = as.character(pointLoc$experiment), "cellData" = as.character(pointLoc$cell)),
-                  xrange = range(pointLoc$x), yrange = range(pointLoc$y))
-    marks(pObjEng)$group = with(marks(pObjEng), paste(fov, experiment, sep = "_"))
-    pointLoc$cellData = pointLoc$cell
     hypEng = buildHyperFrame(pointLoc, coordVars = c("x", "y"), imageVars = c("fov", "experiment"), coVars = c("gene", "cellData"))
     fovs = 0:6;names(fovs) = fovs
     #Download the rois
@@ -289,8 +312,8 @@ if(!file.exists(pObjEngFile <- "Data/pObjEng.RData")){
         rois
     })
     names(rois1) = paste(names(rois1), "1", sep = "_")
-    fovs = 0:9;names(fovs) = fovs
-    rois2 = lapply(fovs, function(fov){
+    fovs2 = 0:9;names(fovs2) = fovs2
+    rois2 = lapply(fovs2, function(fov){
         rois = lapply(fils2 <- list.files(paste0("Data/Eng2019/NIH3T3/ROIs_Experiment2_NIH3T3/ROIs/RoiSet_Pos", fov), full.names = TRUE), function(file){
             read.ijroi(file)
         })
@@ -372,45 +395,19 @@ if(!file.exists(darWindowFile <- "Data/dar2021windowList.RData")){
 ```{r darReadIn}
 #See supplementary files
 if(!file.exists(darSpotsFile <- "Data/dar2021.RData")){
-    darFiles10 = list.files("Data/Dar2021/10h_biofilms/spots_data", full.names = TRUE)
-    dar10List = lapply(darFiles10, function(x){
-        tmp = read.table(x, header = TRUE)
-        tmp$gene = gsub("_merged_spots.txt", "", gsub("Data/Dar2021/10h_biofilms/spots_data/", "", x))
-        tmp
-    })
-    dar10 = Reduce(dar10List, f = rbind)
-    darFiles35 = list.files("Data/Dar2021/35h_biofilms/spots_data", full.names = TRUE)
-    dar35List = lapply(darFiles35, function(x){
-        tmp = read.table(x, header = TRUE)
-        tmp$gene = gsub("_merged_spots.txt", "", gsub("Data/Dar2021/35h_biofilms/spots_data/", "", x))
-        tmp
-    })
-    dar35 = Reduce(dar35List, f = rbind)
+    download.file("https://zenodo.org/records/18258657/files/Dar2021_10h.csv", destfile = "Data/Dar2021/Dar2021_10h.csv")
+    download.file("https://zenodo.org/records/18258657/files/Dar2021_35h.csv", destfile = "Data/Dar2021/Dar2021_35h.csv")
+    dar10 = read.csv("Data/Dar2021/Dar2021_10h.csv")
+    dar35 = read.csv("Data/Dar2021/Dar2021_35h.csv")
     x2 = c(dar10$spot_coord_i, dar35$spot_coord_i)
     y2 = c(dar10$spot_coord_j, dar35$spot_coord_j)
     z2 = c(dar10$spot_coord_z, dar35$spot_coord_z)
     #Z coordinates are integers, others up to 0.1. Z-coordinates are not really independent
-    hypDar = buildHyperFrame(data.frame("x" = x2, "y" = y2, "z" = z2, "gene" = c(dar10$gene, dar35$gene), 
-                                        "fov" = c(dar10$spots_fov, dar35$spots_fov), 
-                                     "cell" = c(dar10$spots_cell_id, dar35$spots_cell_id), 
-                                     "time" = rep(c("10h", "35h"), times = c(nrow(dar10), nrow(dar35)))),
-                             coordVars = c("x", "y"), imageVars = c("z", "fov", "time"))
+    hypDar = buildHyperFrame(data.frame("x" = x2, "y" = y2, "z" = z2, "gene" = c(dar10$gene, dar35$gene), "fov" = c(dar10$spots_fov, dar35$spots_fov), 
+    "cell" = c(dar10$spots_cell_id, dar35$spots_cell_id), 
+    "time" = rep(c("10h", "35h"), times = c(nrow(dar10), nrow(dar35)))),
+    coordVars = c("x", "y"), imageVars = c("z", "fov", "time"))
     rownames(hypDar) = gsub(" ", "", apply(data.frame(hypDar[, c("fov", "time", "z")]), 1, paste, collapse = "_"))
-    #Add windows
-    load(darWindowFile)
-    winList2 = lapply(rownames(hypDar), function(i){
-        cellsNeeded = as.character(unique(marks(hypDar$ppp[[i]])$cell))
-        splitName = sund(i, sep = "_")
-        # #Look in flanking z-regions (see p13, central column, bottom in manuscript)
-        filWin = Filter(lapply(windowListDar[[splitName[[2]]]][[paste0("fov",splitName[[1]])]][cellsNeeded], 
-                               function(y) {
-                                   y[[which.min(abs(as.numeric(splitName[[3]])-as.numeric(names(y))))]]
-                                   #Choose closest z-stack with the cell in it
-                               }), f = is.owin)
-        filWin
-    })
-    names(winList2) = rownames(hypDar)
-    hypDar = addCell(hypDar, winList2, addCellMarkers = FALSE)
     save(hypDar, file = darSpotsFile)
 } else {load(darSpotsFile)}
 unGenesDar = getFeatures(hypDar)
@@ -1468,26 +1465,7 @@ plotWf(distResYang, "nn")
 plotWf(distResYang, "nnPair")
 ```
 
-The distributions of the estimated PIs per point pattern over all features are shown in \fref{fig:histPIs}. The weighting functions for univariate and bivariate nearest-neighbour distance PIs are shown in Figures \ref{fig:nnwf}-\ref{fig:nnwfPair}. We find `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] < 0.5, na.rm = TRUE)` transcript pairs with significant colocalization and `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] > 0.5, na.rm = TRUE)` with antilocalization. The transcript pairs with the most significant colocalization and antilocalization are shown in Figures \ref{fig:colocYang}-\ref{fig:antilocYang}. A graphical network representation of the inferred colocalizations is shown in \fref{fig:hairballYang}.
-
-```{r plotPairsColoc, fig.height = 9, fig.cap = paste0("Most significantly colocalized gene pair in the \\textit{S. moellendorfii} root dataset according to \\smop. Despite its modest effect size (PI = ",  round(colocFeatEffect, 2), "), it owes its high significance to its consistency across replicates. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:colocYang}")}
-numPps = 35; scaleBarSizeYang = c(20, 500)
-plotTopResults(hypFrame = hypYang, results = lmmsYang, pi = "nnPair", Cex = 2, 
-               Cex.main = 0.7, CexLegend = 0.9, numFeats = 1, numPps = numPps, scaleBarSize = scaleBarSizeYang)
-```
-
-```{r pairsLocPdf, include = FALSE}
-pdf("Graphs/colocYang.pdf", width = 8, height = 5)
-colocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] < 0.5 & resYang$Intercept.nnPair[, "pAdj"] < sigLevel,])[1]
-Pps = order(decreasing = TRUE, sapply(hypYang$tabObs, function(x) {sum(sapply(sund(colocFeat), function(y) {tmp = getGp(x, y); if(is.null(tmp)) NA else tmp}))}))
-plotExplore(hypYang, features = colocFeat, Cex = 2, ppps = Pps[seq_len(15)], scaleBarSize = scaleBarSizeYang)
-#Unit is 0.1 micrometer, add a scale bar of length 500 = 50 microns
-dev.off()
-```
-
-```{r plotPairsantioc, fig.height = 9, fig.cap = "Gene pair with most significant antilocalization in the \\textit{S. moellendorfii} root dataset according to \\smop. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:antilocYang}"}
-plotExplore(hypYang, features = antiLocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] > 0.5,])[1], Cex.main = 0.7, CexLegend = 0.9, numPps = numPps, scaleBarSize = scaleBarSizeYang)
-```
+The distributions of the estimated PIs per point pattern over all features are shown in \fref{fig:histPIs}. The weighting functions for univariate and bivariate nearest-neighbour distance PIs are shown in Figures \ref{fig:nnwf}-\ref{fig:nnwfPair}. We find `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] < 0.5, na.rm = TRUE)` transcript pairs with significant colocalization and `r sum(resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] > 0.5, na.rm = TRUE)` with antilocalization. A graphical network representation of the inferred colocalizations is shown in \fref{fig:hairballYang}. The transcript pairs with the most significant colocalization and antilocalization are shown in Figures \ref{fig:colocYang}-\ref{fig:antilocYang}.
 
 ```{r hairball, fig.cap = "\\hl{Gene colocalization network of the \\textit{S. moellendorfii} dataset by \\textcite{Yang2023}, constructed based on the colocalization results of \\smop. Nodes are genes, edges connect genes whose transcripts significantly colocalize.}\\label{fig:hairballYang}"}
 colocFeatAll = rownames(resYang[["Intercept.nnPair"]])[resYang[["Intercept.nnPair"]][, "pAdj"] < sigLevel & resYang[["Intercept.nnPair"]][, "Estimate"] < 0.5 & !is.na(resYang[["Intercept.nnPair"]][, "Estimate"])]
@@ -1509,6 +1487,25 @@ ggraph(g, layout = "fr") + # force-directed layout (hairball)
   theme_void() 
 ```
 
+```{r plotPairsColoc, fig.height = 9, fig.cap = paste0("Most significantly colocalized gene pair in the \\textit{S. moellendorfii} root dataset according to \\smop. Despite its modest effect size (PI = ",  round(colocFeatEffect, 2), "), it owes its high significance to its consistency across replicates. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:colocYang}")}
+numPps = 35; scaleBarSizeYang = c(20, 500)
+plotTopResults(hypFrame = hypYang, results = lmmsYang, pi = "nnPair", Cex = 2, 
+               Cex.main = 0.7, CexLegend = 0.9, numFeats = 1, numPps = numPps, scaleBarSize = scaleBarSizeYang)
+```
+
+```{r pairsLocPdf, include = FALSE}
+pdf("Graphs/colocYang.pdf", width = 8, height = 5)
+colocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] < 0.5 & resYang$Intercept.nnPair[, "pAdj"] < sigLevel,])[1]
+Pps = order(decreasing = TRUE, sapply(hypYang$tabObs, function(x) {sum(sapply(sund(colocFeat), function(y) {tmp = getGp(x, y); if(is.null(tmp)) NA else tmp}))}))
+plotExplore(hypYang, features = colocFeat, Cex = 2, ppps = Pps[seq_len(15)], scaleBarSize = scaleBarSizeYang)
+#Unit is 0.1 micrometer, add a scale bar of length 500 = 50 microns
+dev.off()
+```
+
+```{r plotPairsantioc, fig.height = 9, fig.cap = "Gene pair with most significant antilocalization in the \\textit{S. moellendorfii} root dataset according to \\smop. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:antilocYang}"}
+plotExplore(hypYang, features = antiLocFeat <- rownames(resYang$Intercept.nnPair[resYang$Intercept.nnPair[, "Estimate"] > 0.5,])[1], Cex.main = 0.7, CexLegend = 0.9, numPps = numPps, scaleBarSize = scaleBarSizeYang)
+```
+
 ```{r plotTriosHairball, fig.height = 9, fig.cap = "\\hl{First gene triplet detected as co-expression cluster in \\fref{fig:hairballYang}. The red, blue and pink dots are the transcript triplet, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:colocTriplet}}"}
 numPPsYang = 15;
 plotExplore(hypYang, Cex = 1, features = c("SmCYB2;4", "SmSCL28", "SmPLTc"), 
@@ -1522,6 +1519,60 @@ plotExplore(hypYang, Cex = 2, features = c("SmRBRa", "SmCYCD3;3b", "SmPLTe"),
 
 \clearpage
  
+### Comparison with \spicy and neighbourhood enrichment \label{sec:spiat}
+
+```{r genePairsNamed}
+minSpicyIntPos = names(which.min(joinMat[joinMat[,"spicy_Intercept"] > 0, "spicy_Intercept_pVal"]))
+minPIIntPos = names(which.min(joinMat[joinMat[,"smoppix_Intercept_Estimate"] < 0.5, "smoppix_Intercept_pVal"]))
+minSpicyIntNeg = names(which.min(joinMat[joinMat[,"spicy_Intercept"] < 0, "spicy_Intercept_pVal"]))
+minPIIntNeg = names(which.min(joinMat[joinMat[,"smoppix_Intercept_Estimate"] > 0.5, "smoppix_Intercept_pVal"]))
+```
+
+```{r vennSpciy, fig.width = 8.5, fig.height = 5.9, fig.cap = "Venn diagram of co- and antilocalized transcripts in the dataset by \\textcite{Yang2023} according to \\emph{smoppix} and \\emph{spicyR}.\\label{fig:vennSpicy}"}
+for(i in grep("pVal", colnames(joinMat), value = TRUE)){
+    joinMat = cbind(joinMat, p.adjust(joinMat[, i], method = "BH"))
+    colnames(joinMat)[ncol(joinMat)] = gsub("pVal", "pAdj", i)
+}
+venn(list("Colocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] < 0.5 & 
+                                                         joinMat[,"smoppix_Intercept_pAdj"] < sigLevel], 
+          "Colocalized\nspicyR" = colocSpic <- rownames(joinMat)[joinMat[,"spicy_Intercept"] > 0 & !is.na(joinMat[,"spicy_Intercept"]) & 
+                                                         joinMat[,"spicy_Intercept_pAdj"] < sigLevel],
+            "Antilocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] > 0.5 & joinMat[,"smoppix_Intercept_pAdj"] < sigLevel],
+          "Antilocalized\nspicyR" = antilocSpic <- rownames(joinMat)[joinMat[,"spicy_Intercept"] < 0 & !is.na(joinMat[,"spicy_Intercept"]) & joinMat[,"spicy_Intercept_pAdj"] < sigLevel]))
+#transcript pairs to plot
+antiSpicyR = names(which.min(joinMat[joinMat[, "smoppix_Intercept_pAdj"] < sigLevel &
+                                         joinMat[, "spicy_Intercept"] < 0,"spicy_Intercept_pVal"]))
+colSpicyR = names(which.min(joinMat[joinMat[, "smoppix_Intercept_pAdj"] < sigLevel &
+                                         joinMat[, "spicy_Intercept"] > 0,"spicy_Intercept_pVal"]))
+```
+
+The overlap between the results of \smop and \spicy \parencite{Canete2022} \hl{(run with default parameters)} is shown in \fref{fig:vennSpicy}\label{pag:default}. As an example of different results, _smoppix_ does not consider SmCASP1--SmIAA9b significant, whereas _spicyR_ believes it is colocalized (see \fref{fig:yangSpicy2}). We also applied neighbourhood enrichment (NE), employing the \emph{average\_percentage\_of\_cells\_within\_radius} function from the \spiat package \parencite{Feng2023} to calculate the neighbourhood proportions $p_{gi}$. The Venn diagram with overlap in results with \smop is shown in \fref{fig:vennSpiat}, revealing that NE makes fewer discoveries than \spicy, but they correspond better to those of \smop than those of \spicy. The only gene pair with disagreement is shown in \fref{fig:otherSignSpiat}.
+
+```{r spicy2, fig.height = 9, fig.cap = paste("Transcript pair", colSpicyR, "which is considered colocalized by \\spicy but not significant in the \\smop analysis. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:yangSpicy2}")}
+tmp = sapply(hypYang$tabObs, function(x){
+    sum(x[sund(colSpicyR)], na.rm = TRUE)
+})
+PPsshow = names(sort(tmp, decreasing = TRUE)[1:numPps])
+plotExplore(hypYang, features = colSpicyR, ppps = PPsshow, Cex = 2, 
+            Cex.main = 0.7, scaleBarSize = scaleBarSizeYang)
+```
+
+```{r vennSpiat, fig.width = 8.5, fig.height = 6,fig.cap = "Venn diagram of co- and antilocalized transcripts according to \\emph{smoppix} and NE.\\label{fig:vennSpiat}"}
+vennSpiat = venn(list("Colocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] < 0.5], 
+          "Enriched NE" = colocSpiat <- reverseGn(rownames(spiatYangResMatBi)[spiatYangResMatBi[,"Estimate"] > 0 & !is.na(spiatYangResMatBi[,"pAdj"]) & spiatYangResMatBi[,"pAdj"] < sigLevel]),
+            "Antilocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] > 0.5],
+          "Depleted NE" = antilocSpiat <-  reverseGn(rownames(spiatYangResMatBi)[spiatYangResMatBi[,"Estimate"] < 0 & !is.na(spiatYangResMatBi[,"pAdj"]) & spiatYangResMatBi[,"pAdj"] < sigLevel]))) 
+otherSignSpiat = attr(vennSpiat,"intersections")$`Colocalized\nsmoppix:Depleted NE`
+otherSignSpiatSplit = sund(otherSignSpiat)
+```
+
+```{r otherSignSPiat, fig.height = 9, fig.cap = paste0("Example of gene pair found antilocalized by \\smop but neighbourhood enriched by NE. In this case, the enrichment found by NE is mutual, i.e of ", otherSignSpiatSplit[1], " in the neighbourhood of ", otherSignSpiatSplit[2], " and vice versa. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:otherSignSpiat}")}
+plotExplore(hypYang, otherSignSpiat[1], Cex = 3, Cex.main = 0.7, numPps = numPps, 
+            scaleBarSize = scaleBarSizeYang) 
+```
+
+\clearpage
+
 ### Authors' findings
 
 The authors of the original study came to the following conclusions based on pseudo-segmentation, calculation of Pearson correlation and hierarchical clustering \parencite{Yang2023}:
@@ -1620,60 +1671,6 @@ pdf("GraphsPaper/colocYangValid.pdf", pointsize = psz, height = Height, width = 
 PpsALcol = order(decreasing = TRUE, sapply(hypYang$tabObs, function(x) {sum(sapply(sund(colocFeatPaper), function(y) {tmp = getGp(x, y); if(is.null(tmp)) NA else tmp}))}))
 plotExplore(hypYang, features = colocFeatPaper, Cex = CexPlot, ppps = PpsALcol[seq_len(numPPsYang)], Cex.main = CexMain, Mar = MarYang, CexLegend = CexLegendYang, CexLegendMain = CexLegendMainYang, scaleBarSize = scaleBarSizeYang)
 dev.off()
-```
-
-\clearpage
-
-### Comparison with \spicy and neighbourhood enrichment \label{sec:spiat}
-
-```{r genePairsNamed}
-minSpicyIntPos = names(which.min(joinMat[joinMat[,"spicy_Intercept"] > 0, "spicy_Intercept_pVal"]))
-minPIIntPos = names(which.min(joinMat[joinMat[,"smoppix_Intercept_Estimate"] < 0.5, "smoppix_Intercept_pVal"]))
-minSpicyIntNeg = names(which.min(joinMat[joinMat[,"spicy_Intercept"] < 0, "spicy_Intercept_pVal"]))
-minPIIntNeg = names(which.min(joinMat[joinMat[,"smoppix_Intercept_Estimate"] > 0.5, "smoppix_Intercept_pVal"]))
-```
-
-```{r vennSpciy, fig.width = 8.5, fig.height = 5.9, fig.cap = "Venn diagram of co- and antilocalized transcripts in the dataset by \\textcite{Yang2023} according to \\emph{smoppix} and \\emph{spicyR}.\\label{fig:vennSpicy}"}
-for(i in grep("pVal", colnames(joinMat), value = TRUE)){
-    joinMat = cbind(joinMat, p.adjust(joinMat[, i], method = "BH"))
-    colnames(joinMat)[ncol(joinMat)] = gsub("pVal", "pAdj", i)
-}
-venn(list("Colocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] < 0.5 & 
-                                                         joinMat[,"smoppix_Intercept_pAdj"] < sigLevel], 
-          "Colocalized\nspicyR" = colocSpic <- rownames(joinMat)[joinMat[,"spicy_Intercept"] > 0 & !is.na(joinMat[,"spicy_Intercept"]) & 
-                                                         joinMat[,"spicy_Intercept_pAdj"] < sigLevel],
-            "Antilocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] > 0.5 & joinMat[,"smoppix_Intercept_pAdj"] < sigLevel],
-          "Antilocalized\nspicyR" = antilocSpic <- rownames(joinMat)[joinMat[,"spicy_Intercept"] < 0 & !is.na(joinMat[,"spicy_Intercept"]) & joinMat[,"spicy_Intercept_pAdj"] < sigLevel]))
-#transcript pairs to plot
-antiSpicyR = names(which.min(joinMat[joinMat[, "smoppix_Intercept_pAdj"] < sigLevel &
-                                         joinMat[, "spicy_Intercept"] < 0,"spicy_Intercept_pVal"]))
-colSpicyR = names(which.min(joinMat[joinMat[, "smoppix_Intercept_pAdj"] < sigLevel &
-                                         joinMat[, "spicy_Intercept"] > 0,"spicy_Intercept_pVal"]))
-```
-
-The overlap between the results of \smop and \spicy \parencite{Canete2022} \hl{(run with default parameters)} is shown in \fref{fig:vennSpicy}\label{pag:default}. As an example of different results, _smoppix_ does not consider SmCASP1--SmIAA9b significant, whereas _spicyR_ believes it is colocalized (see \fref{fig:yangSpicy2}). We also applied neighbourhood enrichment (NE), employing the \emph{average\_percentage\_of\_cells\_within\_radius} function from the \spiat package \parencite{Feng2023} to calculate the neighbourhood proportions $p_{gi}$. The Venn diagram with overlap in results with \smop is shown in \fref{fig:vennSpiat}, revealing that NE makes fewer discoveries than \spicy, but they correspond better to those of \smop than those of \spicy. The only gene pair with disagreement is shown in \fref{fig:otherSignSpiat}.
-
-```{r spicy2, fig.height = 9, fig.cap = paste("Transcript pair", colSpicyR, "which is considered colocalized by \\spicy but not significant in the \\smop analysis. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:yangSpicy2}")}
-tmp = sapply(hypYang$tabObs, function(x){
-    sum(x[sund(colSpicyR)], na.rm = TRUE)
-})
-PPsshow = names(sort(tmp, decreasing = TRUE)[1:numPps])
-plotExplore(hypYang, features = colSpicyR, ppps = PPsshow, Cex = 2, 
-            Cex.main = 0.7, scaleBarSize = scaleBarSizeYang)
-```
-
-```{r vennSpiat, fig.width = 8.5, fig.height = 6,fig.cap = "Venn diagram of co- and antilocalized transcripts according to \\emph{smoppix} and NE.\\label{fig:vennSpiat}"}
-vennSpiat = venn(list("Colocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] < 0.5], 
-          "Enriched NE" = colocSpiat <- reverseGn(rownames(spiatYangResMatBi)[spiatYangResMatBi[,"Estimate"] > 0 & !is.na(spiatYangResMatBi[,"pAdj"]) & spiatYangResMatBi[,"pAdj"] < sigLevel]),
-            "Antilocalized\nsmoppix" = rownames(joinMat)[joinMat[,"smoppix_Intercept_Estimate"] > 0.5],
-          "Depleted NE" = antilocSpiat <-  reverseGn(rownames(spiatYangResMatBi)[spiatYangResMatBi[,"Estimate"] < 0 & !is.na(spiatYangResMatBi[,"pAdj"]) & spiatYangResMatBi[,"pAdj"] < sigLevel]))) 
-otherSignSpiat = attr(vennSpiat,"intersections")$`Colocalized\nsmoppix:Depleted NE`
-otherSignSpiatSplit = sund(otherSignSpiat)
-```
-
-```{r otherSignSPiat, fig.height = 9, fig.cap = paste0("Example of gene pair found antilocalized by \\smop but neighbourhood enriched by NE. In this case, the enrichment found by NE is mutual, i.e of ", otherSignSpiatSplit[1], " in the neighbourhood of ", otherSignSpiatSplit[2], " and vice versa. The red and blue dots are the transcript pair, all other transcripts are shown in grey. The scale bars in black measure 50$\\mu$m.\\label{fig:otherSignSpiat}")}
-plotExplore(hypYang, otherSignSpiat[1], Cex = 3, Cex.main = 0.7, numPps = numPps, 
-            scaleBarSize = scaleBarSizeYang) 
 ```
 
 \clearpage
@@ -1846,8 +1843,6 @@ colnames(tabConf2)[2:3] = c("Standard error", "P-value")
 rownames(tabConf2)[6:8] = gsub("--", "-", rownames(tabConf)[c(2,1,3)])
 tabConfOut = rbind(data.frame("Experiment" = "1", tabConf), data.frame("Experiment" = "2", tabConf2[c(7,6,8, 1:5),]))
 print.xtable(xtable(tabConfOut, display = c("s", "s", "f", "f", "e", "e"), caption = "\\label{tab:pValConf2}Mixed-model results for pixelwise correlation between transcript pairs in two HCR RNA-FISH experiments", digits = c(NA, NA, 3,3,1,1)), comment = FALSE)
-#SmSGNA-SmPINR: same global patterns, locally slightly different
-#SmSGNb-SmPINS: same, not significant in smFISH
 ```
 
 \clearpage
@@ -1948,7 +1943,7 @@ venn(list("Close to\nedge smoppix" = smoppixEdge, "Protrusions\nauthors" = protr
 
 ## \smop detects shifts in localization patterns over time in bacterial biofilms \label{sec:dar}
 
-\textcite{Dar2021} profiled \emph{Pseudomonas aeruginosa} biofilms for spatial expression of 108 genes after 10h of growth (7 replicates) and after 35h of growth (3 replicates). The biofilms were scanned at different depths (z-coordinates), but the lower and upper layers often yielded few molecules. The data were analysed in 2D here, so considering each z-plane as a separate replicate, and including a random effect for biofilm instance. We look for differences in spatial organisation between 10h and 35h. The transcript pair with most significant differential spatial localization between 10h and 35h is shown in \fref{fig:Dar} in the main text. Further differences between both conditions are shown here in Figures \ref{fig:strongDiffDar}-\ref{fig:strongDiffDarBi3}, demonstrating \smop' ability to detect differences in spatial localization patterns between conditions.
+\textcite{Dar2021} profiled \emph{Pseudomonas aeruginosa} biofilms for spatial expression of 108 genes after 10h of growth (7 replicates) and after 35h of growth (3 replicates). The biofilms were scanned at different depths (z-coordinates), but the lower and upper layers often yielded few molecules. The data were analysed in 2D here, so considering each z-plane as a separate replicate, and including a random effect for biofilm instance. We look for differences in spatial organization between 10h and 35h. The transcript pair with most significant differential spatial localization between 10h and 35h is shown in \fref{fig:Dar} in the main text. Further differences between both conditions are shown here in Figures \ref{fig:strongDiffDar}-\ref{fig:strongDiffDarBi3}, demonstrating \smop' ability to detect differences in spatial localization patterns between conditions.
 
 ```{r DarOverall}
 if(!file.exists(DarOverallFile <- "Results/DarOverall.RData")){
@@ -2138,7 +2133,7 @@ plotExplore(hypDarSub, scaleBarSize = scaleBarSizeDar, Nrow = 3, names(which.min
 
 ## Probabilistic indices serve as interpretable predictors in tumor classification
 
-We reanalyse breast cancer sections from 33 patients by \textcite{Keren2018}, available through the _funkycells_ R-package \parencite{VanderDoes2023}. Locations of 16 different cell types were measured in a single section per patient. The tumors were categorized into two classes, "compartimentalised" and "mixed" by the authors of the original article (we drop the "cold" tumor type with only six cases here) \parencite{Keren2018}. A plot highlighting the tumor cells is shown in \fref{fig:explTNBC} in the main text. In addition, the age of the patients was recorded, revealing an association between age and tumor type (\fref{fig:boxAge}). There are also differences in cell type counts across the tumor types (\fref{fig:boxCount}). Here we test whether PIs differ between tumor types, and whether they can serve as interpretable predictors. 
+We reanalyse breast cancer sections from 33 patients by \textcite{Keren2018}, available through the _funkycells_ R-package \parencite{VanderDoes2023data}. Locations of 16 different cell types were measured in a single section per patient. The tumors were categorized into two classes, "compartimentalized" and "mixed" by the authors of the original article (we drop the "cold" tumor type with only six cases here) \parencite{Keren2018}. A plot highlighting the tumor cells is shown in \fref{fig:explTNBC} in the main text. In addition, the age of the patients was recorded, revealing an association between age and tumor type (\fref{fig:boxAge}). There are also differences in cell type counts across the tumor types (\fref{fig:boxCount}). Here we test whether PIs differ between tumor types, and whether they can serve as interpretable predictors. 
 
 ```{r TNBC}
 if(!file.exists(datFileTNBC <- "Data/TNBC.RData")){
@@ -2164,28 +2159,19 @@ if(!file.exists(piTNBCfile <- "Results/piTNBC.RData")){
 boxplot(hypTNBC$age ~ hypTNBC$Class, ylab = "Age", xlab = "Tumor type")
 ```
 
-```{r cellCounts, fig.cap = "Boxplots of cell counts (y-axis) as a function of tumor type (colour) for different cell types (x-axis).\\label{fig:boxCount}", fig.height = 4}
-cellCounts = makeTabObsMat(pisTNBC$hypFrame, pisTNBC$hypFrame$Person)
-dfcc = data.frame(cellCounts, "Tumor_type" = hypTNBC$Class)
-moltDfcc = melt(dfcc, id.vars = "Tumor_type")
-ggplot(data = moltDfcc, aes(y = value, x = variable, fill = Tumor_type)) +
-     geom_boxplot() + ylab("Cell count") + xlab("Cell type") + 
-    theme(axis.text.x = element_text(angle = 90))
-```
-
 \clearpage
 
 ### Hypothesis tests
 
-Significant differences between tumor types according to \smop are shown in Table \ref{tab:smoptnbc}. The cell type pair most significantly more antilocalized in the "compartimentalised" type according to \smop (CD4T--tumor) is shown in \fref{fig:nnpairClass}. Significant differences between tumor types in neighbourhood enrichment tests are found in Table \ref{tab:spiattnbc}.
+Significant differences between tumor types according to \smop are shown in Table \ref{tab:smoptnbc}. The cell type pair most significantly more antilocalized in the "compartimentalized" type according to \smop (CD4T--tumor) is shown in \fref{fig:nnpairClass}. Significant differences between tumor types in neighbourhood enrichment tests are found in Table \ref{tab:spiattnbc}.
 
-```{r resClass2, fig.cap = "Cell type pair most significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop. The red and blue dots are the cell type pair, all other cell types are grey. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass}"}
+```{r resClass2, fig.cap = "Cell type pair most significantly more antilocalized in type 'compartimentalized' than in type 'mixed' according to \\smop. The red and blue dots are the cell type pair, all other cell types are grey. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass}"}
 scaleBarSizeKeren = c(12, 300)
 plotTopResults(hypFrame = hypTNBC, scaleBarSize = scaleBarSizeKeren, results = TNBClmms, pi = "nnPair", effect = "Class", effectParameter = "compartimentalised", what = "anti", numFeat =1, Cex.main = 0.9, Nrow = 5)
 #Indeed clear differences between classes
 ```
 
-```{r resClass3, fig.cap = "Scatterplot of the only cell type pair not involving tumor cells that is significantly more antilocalized in type 'compartimentalised' than in type 'mixed' according to \\smop. The red and blue dots are the cell type pair, all other cell types are grey. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass2}"}
+```{r resClass3, fig.cap = "Scatterplot of the only cell type pair not involving tumor cells that is significantly more antilocalized in type 'compartimentalized' than in type 'mixed' according to \\smop. The red and blue dots are the cell type pair, all other cell types are grey. The scale bars in black measure 150$\\mu$m.\\label{fig:nnpairClass2}"}
 plotExplore(hypFrame = hypTNBC, scaleBarSize = scaleBarSizeKeren, "CD4T--Otherimmune", Cex.main = 0.9, Nrow = 5)
 ```
 
@@ -2195,7 +2181,7 @@ tabBi = getResults(TNBClmms, pi = "nnPair", "Class")
 tabAll = rbind(tabUni[tabUni[, "pAdj"] < sigLevel,,drop = FALSE], tabBi[tabBi[, "pAdj"] < sigLevel,])
 colnames(tabAll) = gsub("Class", "Tumor type: ", colnames(tabAll))
 colnames(tabAll)[3:4] = c("P-value", "Adjusted p-value")
-print.xtable(xtable(tabAll, caption = "\\label{tab:smoptnbc}Table of univariate and bivariate localization patterns significantly different between tumor types according to \\smop. The first two columns show the coefficients of the tumor types in the sum coding scheme, with positive numbers indicating stronger regularity or antilocalisation. For the bivariate patterns, the cell types are separated by hyphens.", digits = c(1,3,3,1,1), display = c("s", "f", "f", "e", "e")), comment = FALSE)
+print.xtable(xtable(tabAll, caption = "\\label{tab:smoptnbc}Table of univariate and bivariate localization patterns significantly different between tumor types according to \\smop. The first two columns show the coefficients of the tumor types in the sum coding scheme, with positive numbers indicating stronger regularity or antilocalization. For the bivariate patterns, the cell types are separated by hyphens.", digits = c(1,3,3,1,1), display = c("s", "f", "f", "e", "e")), comment = FALSE)
 ```
 
 ```{r spicyRtnbc}
@@ -2248,10 +2234,10 @@ biSigSpiat = cbind(biSigSpiat, "Adjusted p-value" = pAdjBi[idBi])
 ageRes = t(sapply(TNBCspiatLms, function(x) x["age", c("Estimate", "Std. Error", "Pr(>|t|)")]))
 ```
 
-```{r spiatSignif, results  ="asis"}
+```{r spiatSignif, results  = "asis"}
 totTab = rbind(uniSigSpiat, biSigSpiat) 
 colnames(totTab)[2:3] = c("Standard error", "P-value")
-print.xtable(xtable(totTab, caption = "\\label{tab:spiattnbc}Table of significant differences in univariate and bivariate neighbourhood enrichments between tumor types. The estimates shown are the average difference (the 'mixed' tumors minus the 'compartimentalised' tumors) in log-ratio of the proportion of molecules in the neighbourhood over overall in the image. For the bivariate results (cell type pairs separated by hyphens), the estimate refers to enrichment of the second cell type in the vicinity of the first. Positive estimates indicate more aggregation or colocalization in the mixed group, and vice versa for negative estimates.", digits = 2,  display = c("s", "f", "f", "e", "e")), comment = FALSE)
+print.xtable(xtable(totTab, caption = "\\label{tab:spiattnbc}Table of significant differences in univariate and bivariate neighbourhood enrichments between tumor types. The estimates shown are the average difference (the 'mixed' tumors minus the 'compartimentalized' tumors) in log-ratio of the proportion of molecules in the neighbourhood over overall in the image. For the bivariate results (cell type pairs separated by hyphens), the estimate refers to enrichment of the second cell type in the vicinity of the first. Positive estimates indicate more aggregation or colocalization in the mixed group, and vice versa for negative estimates.", digits = 2,  display = c("s", "f", "f", "e", "e")), comment = FALSE)
 ```
 
 ```{r compareSpicySmoppixVanderdoes, fig.cap = "Boxplots of univariate nearest-neighbour distance PI by \\smop (left), u-statistic by \\textit{spicyR} (center) and NE log-ratio (right) (y-axis) as a function of tumor type (x-axis) for tumor cells. The difference is pronounced for \\smop and NE, which capture the aggregation of tumor cells as seen from \\fref{fig:explTNBC} in the main text. The outlier of the mixed class is the patient with age 37 mentioned as possible missclassified instance in the main text, see \\fref{fig:explTNBC}. The difference in \\textit{spicyR}'s test statistic is less pronounced and even suggests stronger aggregation of tumor cells in the mixed class.\\label{fig:diffVanderdoes}", fig.height = 4.25}
@@ -2262,6 +2248,15 @@ tumorUs = spicyVanderdoes$pairwiseAssoc$Tumor__Tumor
 boxplot(tumorUs ~ hypTNBC$Class, ylab = "Univariate u-statistic", xlab = "Tumor type", main = "spicyR")
 boxplot(TNBCspiat$loMat["Tumor",]~ hypTNBC$Class, ylab = "Log-ratio of average percentage of cells in neighbourhood\nrelative to baseline", xlab = "Tumor type", main = "NE")
 par(mfrow = c(1,1))
+```
+
+```{r cellCounts, fig.cap = "Boxplots of cell counts (y-axis) as a function of tumor type (colour) for different cell types (x-axis).\\label{fig:boxCount}", fig.height = 4}
+cellCounts = makeTabObsMat(pisTNBC$hypFrame, pisTNBC$hypFrame$Person)
+dfcc = data.frame(cellCounts, "Tumor_type" = hypTNBC$Class)
+moltDfcc = melt(dfcc, id.vars = "Tumor_type")
+ggplot(data = moltDfcc, aes(y = value, x = variable, fill = Tumor_type)) +
+     geom_boxplot() + ylab("Cell count") + xlab("Cell type") + 
+    theme(axis.text.x = element_text(angle = 90))
 ```
 
 ```{r explTNBC, include = FALSE}
@@ -2520,7 +2515,7 @@ The tests in \smop discussed in the main text are nonparametric, as they do not 
 L(\mb C|\lambda) = \exp\left(-\int \lambda(\mb C)d\mb C\right)\prod_{i=1}^N\lambda(\mb c_i),
 \label{eq:likpp}
 \end{equation}
-with $\lambda(\mb c_i)$ an intensity parameter. For a homogeneous Poisson process, the intensity is constant over space: $\lambda(\mb c_i) = \lambda$. If a region A can be delineated, a parametric approach to detecting departures from CSR is to replace the constant intensity $\lambda$ in \eqref{eq:likpp} by an intensity varying over space. We focus here on gradients as they are known to occur in tissues and cells \parencite{Ashe2006}. Allowing for differences in slope and direction of the gradient across point patterns, the intensity of such an inhomogeneous Poisson process is modeled as:
+with $\lambda(\mb c_i)$ an intensity parameter. For a homogeneous Poisson process, the intensity is constant over space: $\lambda(\mb c_i) = \lambda$. If a region A can be delineated, a parametric approach to detecting departures from CSR is to replace the constant intensity $\lambda$ in \eqref{eq:likpp} by an intensity varying over space. We focus here on gradients as they are known to occur in tissues and cells. Allowing for differences in slope and direction of the gradient across point patterns, the intensity of such an inhomogeneous Poisson process is modeled as:
 
 \begin{equation}
 \log\left(\lambda(\mb c_i)\right) = \gamma + \sum_{t=1}^n\left[\alpha_t x_i + \beta_t y_i\right]I(\mb c_i \in A_t).
@@ -2614,7 +2609,7 @@ $\epsilon_{gi}$ & Regression error & Regression error in the linear model for fe
 # Software versions
 
 ```{r sessioInfo}
-sessionInfo()
+sessionInfo() 
 ```
 
 <!-- Illustrative graphs on point processes and interevent distances -->
