@@ -1437,7 +1437,7 @@ ggplot(data = moltTimingsMat[moltTimingsMat$quantity %in% c("Elapsed time (minut
 
 ## Discoveries on \emph{S. moellendorfii} roots are confirmed by HCR RNA-FISH 
 
-In the initial \emph{S. moellendorfii} root study by \textcite{Yang2023}, all transcripts measured are localized towards the center of the roots (see \fref{fig:plotTiffYang}), since the genes analyzed are primarily active in the vasculature. Hence we use the background of all other transcripts as baseline to call co- or antilocalization using \smop. The sections were taken at different planes of the root, but are considered here as repeated measures. All images from this initial study can be found at \url{https://bioinformatics.psb.ugent.be/webtools/spatial-transcriptomics/selaginella/} and in the Supplementary data of this article.
+In the initial \emph{S. moellendorfii} root study by \textcite{Yang2023}, all transcripts measured are localized towards the center of the roots (see \fref{fig:plotTiffYang}), since the genes analyzed are primarily active in the vasculature. Hence we use the background of all other transcripts as baseline to call co- or antilocalization using \smop. The sections were taken at different planes of the root, but are considered here as repeated measures. All images from this initial study can be found at \url{https://bioinformatics.psb.ugent.be/webtools/spatial-transcriptomics/selaginella/} and all raw data from \url{https://doi.org/10.5281/zenodo.18269124} \parencite{Yang2023data}.
 
 \begin{figure}
 \includegraphics[width = 0.3\linewidth, angle =90]{Data/Yang2023/Calcofluor.png}
@@ -1636,8 +1636,8 @@ fooSbs = lapply(pairsPrintSbs, function(yyy){
     PPP = hypYang$ppp[[PpsSbs[[yyy]]]]
     features <- sund(yyy)
     Cols <- smoppix:::makeCols(features, hypYang)
-    Cols[Cols=="red"] = "chartreuse3"
-    Cols[Cols=="blue"] = "red"
+    Cols[Cols=="red"] = "green"
+    Cols[Cols=="blue"] = "magenta"
     cordMat <- coords(PPP)
     Cols = Cols[marks(PPP)$gene]
     ordVec <- order(Cols != "grey")
@@ -1649,12 +1649,6 @@ fooSbs = lapply(pairsPrintSbs, function(yyy){
 par(mfrow = c(1,1))
 dev.off()
 ```
-
-\begin{figure}
-\centering
-\includegraphics[width = \linewidth]{GraphsPaper/ConfocalImage2VerticalTwoColumn.pdf}
-\caption{\hl{Side by side comparison of the images of the second HCR RNA-FISH experiment shown in \fref{fig:YangConfocal}b in the main paper (first and third columns) with to the right the smFISH results of the corresponding gene pairs by \textcite{Yang2023} (second and fourth columns).}\label{fig:sidebyside}}
-\end{figure}
 
 ```{r plotPaper, include = FALSE}
 CexMain = 1.9;CexLegendYang = 2.3;CexLegendMainYang = 3
@@ -1688,6 +1682,12 @@ print.xtable(size = "footnotesize", xtable(canMat, align = "r|r|rr|rr|rr|", digi
 ```
 
 HCR RNA-FISH was conducted as described previously \parencite{Oliva2022} and according to the manufacturer’s guidelines (\url{https://www.molecularinstruments.com/hcr-rnafish-protocols}). Probes for genes were designed and synthesized by Molecular Instruments (\url{www.molecularinstruments.com}). The Selaginella roots were fixed by 4% formalin-aceto-alcohol (FAA) and permeabilized by series of ethanol and methanol \parencite{Young2020}. Partial cell wall digestion was done with the enzyme mix described previously \parencite{Rozier2014, Oliva2022, Huang2023}. After enzyme digestion, roots were fixed in 10% (v/v) formaldehyde, Proteinase K treated and fixed in 10% (v/v) formaldehyde again. Cell wall staining occurred by 0.1\% Calcofluor White for 30 min in ClearSee, after which the samples were stored in ClearSee. Confocal imaging of roots was performed using a Zeiss LSM710 confocal microscope for the first experiment and a Leica Stellaris 5 confocal microscope for the second experiment, imaging green fluorophores by 561 nm excitation and 580-650 nm wavelength detection, red fluorophores by 633 nm excitation and 650-755 nm wavelength detection, and Calcofluor White by 405 nm excitation and 410-525 nm wavelength detection.
+
+\begin{figure}
+\centering
+\includegraphics[width = \linewidth]{GraphsPaper/ConfocalImage2VerticalTwoColumnMagenta.pdf}
+\caption{\hl{Side by side comparison of the images of the second HCR RNA-FISH experiment shown in \fref{fig:YangConfocal}b in the main paper (first and third columns) with to the right the smFISH results of the corresponding gene pairs by \textcite{Yang2023} (second and fourth columns).} Red fluorophores were pseudocoloured to magenta in the HCR RNA-FISH images for legibility.\label{fig:sidebyside}}
+\end{figure}
 
 Sample images per gene pair are shown in \fref{fig:YangConfocal} in the main text, the full stack of images is available from the BioStudies repository \parencite{Sarkans2018} with accession number S-BSST2022. As background correction, pixels falling below the average intensity plus two times the standard deviation of either colour channel were omitted before calculating Pearson correlations between pixels, similar to \textcite{Choi2014}. The relationship between the estimated Pearson correlation, its standard error and the z-coordinate are explored in Figures \ref{fig:scatterConf}-\ref{fig:scatterConf2}. Given its observed dependence on root and z-coordinate, we decided to model the Pearson correlation $\rho_{i\eta}$ in z-coordinate image $i$ of root $\eta$ using the following mixed-effects model:
 
